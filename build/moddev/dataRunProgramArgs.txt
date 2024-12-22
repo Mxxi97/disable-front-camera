@@ -1,0 +1,29 @@
+# Main Class
+cpw.mods.bootstraplauncher.BootstrapLauncher
+
+# NeoForge Run-Type Program Arguments
+--launchTarget
+forgedatauserdev
+--assetIndex
+17
+--assetsDir
+C:\\Users\\max97\\.gradle\\caches\\neoformruntime\\assets
+--gameDir
+.
+--fml.neoForgeVersion
+21.1.90
+--fml.fmlVersion
+4.0.34
+--fml.mcVersion
+1.21.1
+--fml.neoFormVersion
+20240808.144430
+
+# User Supplied Program Arguments
+--mod
+disable_front_camera
+--all
+--output
+"C:\\Users\\max97\\IdeaProjects\\disable front camera\\src\\generated\\resources"
+--existing
+"C:\\Users\\max97\\IdeaProjects\\disable front camera\\src\\main\\resources"

@@ -1,0 +1,5 @@
+{
+  "itemGroup.disable_front_camera": "Example Mod Tab",
+  "block.disable_front_camera.example_block": "Example Block",
+  "item.disable_front_camera.example_item": "Example Item"
+}
