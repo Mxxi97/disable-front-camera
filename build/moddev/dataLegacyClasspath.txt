@@ -105,4 +105,4 @@ C:\Users\max97\.gradle\caches\modules-2\files-2.1\org.ow2.asm\asm-tree\9.7\e446a
 C:\Users\max97\.gradle\caches\modules-2\files-2.1\org.ow2.asm\asm-util\9.7\c0655519f24d92af2202cb681cd7c1569df6ead6\asm-util-9.7.jar
 C:\Users\max97\.gradle\caches\modules-2\files-2.1\org.ow2.asm\asm\9.7\73d7b3086e14beb604ced229c302feff6449723\asm-9.7.jar
 C:\Users\max97\.gradle\caches\modules-2\files-2.1\org.slf4j\slf4j-api\2.0.9\7cf2726fdcfbc8610f9a71fb3ed639871f315340\slf4j-api-2.0.9.jar
-C:\Users\max97\IdeaProjects\disable front camera\build\moddev\artifacts\client-extra-aka-minecraft-resources-21.1.90-neoforge.jar
+C:\Users\max97\Documents\repositories\disable-front-camera\build\moddev\artifacts\client-extra-aka-minecraft-resources-21.1.90-neoforge.jar

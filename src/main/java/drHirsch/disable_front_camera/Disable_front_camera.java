@@ -14,10 +14,6 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 public class Disable_front_camera {
     public static final String MODID = "disable_front_camera";
 
-    public Disable_front_camera(IEventBus modEventBus, ModContainer modContainer) {
-
-    }
-
     @EventBusSubscriber(modid = Disable_front_camera.MODID, value = Dist.CLIENT)
     public static class ClientModEvents {
 

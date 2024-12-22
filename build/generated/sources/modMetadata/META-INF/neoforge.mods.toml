@@ -17,7 +17,7 @@ license = "All Rights Reserved"
 # The modid of the mod
 modId = "disable_front_camera" #mandatory
 # The version number of the mod
-version = "1.0-SNAPSHOT" #mandatory
+version = "1.0.0" #mandatory
 # A display name for the mod
 displayName = "disable front camera" #mandatory
 # A URL to query for updates for this mod. See the JSON update specification https://docs.neoforge.net/docs/misc/updatechecker/
@@ -29,10 +29,10 @@ displayName = "disable front camera" #mandatory
 # A text field displayed in the mod UI
 #credits="" #optional
 # A text field displayed in the mod UI
-authors = "" #optional
+authors = "DrHirsch" #optional
 
 # The description text for the mod (multi line!) (#mandatory)
-description = ''''''
+description = '''Disables the front camera'''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 #[[mixins]]

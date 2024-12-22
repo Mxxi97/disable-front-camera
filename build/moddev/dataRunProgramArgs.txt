@@ -24,6 +24,6 @@ C:\\Users\\max97\\.gradle\\caches\\neoformruntime\\assets
 disable_front_camera
 --all
 --output
-"C:\\Users\\max97\\IdeaProjects\\disable front camera\\src\\generated\\resources"
+C:\\Users\\max97\\Documents\\repositories\\disable-front-camera\\src\\generated\\resources
 --existing
-"C:\\Users\\max97\\IdeaProjects\\disable front camera\\src\\main\\resources"
+C:\\Users\\max97\\Documents\\repositories\\disable-front-camera\\src\\main\\resources
