@@ -1,1 +1,0 @@
-# disable-front-camera
