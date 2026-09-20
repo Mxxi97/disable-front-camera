@@ -28,11 +28,31 @@ jobs:
           # across the range, and the oldest toolchain emits Java 21 class files,
           # which the Java 25 JVM used by Minecraft 26.x loads happily. The reverse
           # is not true, so this direction matters.
-          echo "neoforge=$(jq -r '.targets[0].neoforge' versions.json)" >> "$GITHUB_OUTPUT"
-          echo "game-versions=$(jq -r '[.targets[].minecraft] | join(",")' versions.json)" >> "$GITHUB_OUTPUT"
+          neoforge=$(jq -r '.targets[0].neoforge' versions.json)
+          # Underscore, not a hyphen: in GitHub expressions "outputs.game-versions"
+          # parses as a subtraction, so the value would silently arrive empty.
+          game_versions=$(jq -r '[.targets[].minecraft] | join(",")' versions.json)
           # From gradle.properties, not the tag name, so that a manual
           # workflow_dispatch run does not try to publish a version called "main".
-          echo "version=$(sed -n 's/^mod_version=//p' gradle.properties)" >> "$GITHUB_OUTPUT"
+          version=$(sed -n 's/^mod_version=//p' gradle.properties)
+
+          # mc-publish only complains about these once the jar is already built.
+          for pair in "neoforge=$neoforge" "game_versions=$game_versions" "version=$version"; do
+            if [ "${pair#*=}" = "" ]; then
+              echo "::error title=Empty release input::${pair%%=*} resolved to nothing. Check versions.json and gradle.properties."
+              exit 1
+            fi
+          done
+
+          echo "NeoForge:      $neoforge"
+          echo "Version:       $version"
+          echo "Game versions: $game_versions"
+
+          {
+            echo "neoforge=$neoforge"
+            echo "game_versions=$game_versions"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check publishing credentials
         env:
@@ -47,7 +67,8 @@ jobs:
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: $MODRINTH_TOKEN" https://api.modrinth.com/v2/user)
           if [ "$code" != "200" ]; then
-            echo "::error title=MODRINTH_TOKEN rejected::Modrinth returned HTTP $code. The token is invalid, expired, or lacks the 'Create versions' scope."
+            echo "::error title=MODRINTH_TOKEN rejected::Modrinth returned HTTP $code for /v2/user. Create a new token at https://modrinth.com/settings/pats with BOTH 'Read user data' and 'Create versions' scopes, then update the MODRINTH_TOKEN secret."
+            echo "Note: /v2/user needs the 'Read user data' scope, so a token scoped only to 'Create versions' also fails here even though it could publish." >&2
             exit 1
           fi
           echo "MODRINTH_TOKEN is valid."
@@ -75,19 +96,20 @@ jobs:
 
       - uses: Kira-NT/mc-publish@v3.3.1
         with:
-          # The Modrinth slug is public (it is in the project URL), so it is set here
-          # rather than in repository config. An empty modrinth-id makes mc-publish
-          # fail before it publishes anything, and a repo variable is easy to get
-          # wrong -- it must be a Variable, not a Secret. vars.MODRINTH_ID still
-          # overrides this if it is ever set.
-          modrinth-id: ${{ vars.MODRINTH_ID || 'disable-front-camera' }}
+          # The immutable Modrinth project id, not the slug, so renaming the project
+          # cannot break releases. It is public (the API serves it to anyone) and is
+          # set here rather than in repository config because an empty modrinth-id
+          # makes mc-publish fail before publishing anything, and a repo variable is
+          # easy to get wrong -- it must be a Variable, not a Secret.
+          # vars.MODRINTH_ID still overrides this if it is ever set.
+          modrinth-id: ${{ vars.MODRINTH_ID || 'WklfOz03' }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           files: build/libs/*.jar
           loaders: neoforge
           # Every version the matrix just verified, listed explicitly rather than
           # inferred from the jar's version range.
-          game-versions: ${{ steps.meta.outputs.game-versions }}
+          game-versions: ${{ steps.meta.outputs.game_versions }}
           game-version-filter: none
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
