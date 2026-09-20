@@ -28,17 +28,23 @@ const MODDEV_METADATA =
   'https://plugins.gradle.org/m2/net/neoforged/moddev/net.neoforged.moddev.gradle.plugin/maven-metadata.xml'
 const FORGE_PROMOTIONS =
   'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json'
+const FABRIC_LOADER_META = 'https://meta.fabricmc.net/v2/versions/loader'
+// P7dR8mSH is the immutable Modrinth project id of Fabric API.
+const FABRIC_API_VERSIONS = (mc) =>
+  `https://api.modrinth.com/v2/project/P7dR8mSH/version?game_versions=${encodeURIComponent(`["${mc}"]`)}&loaders=${encodeURIComponent('["fabric"]')}`
 
 // Minecraft 1.21.1 was the mod's original target; never regress below it.
 // (There is deliberately no 21.2 series -- NeoForge skipped Minecraft 1.21.2.)
 const FLOOR_SERIES = [21, 1]
 
-// Forge support deliberately starts at the calendar versions (26.x): the 1.21.x
-// line would need the pre-rewrite Forge APIs and a Java 21 toolchain, and
-// NeoForge already covers those players. Targets below this floor, or whose
-// Minecraft version Forge has not shipped yet, carry forge: null -- a NeoForge
-// release must never wait on Forge lagging behind.
+// Forge and Fabric support deliberately start at the calendar versions (26.x):
+// the 1.21.x line would need the pre-rewrite Forge APIs / intermediary-remapped
+// Fabric builds and a Java 21 toolchain, and NeoForge already covers those
+// players. Targets below this floor, or whose Minecraft version a loader has
+// not shipped for yet, carry forge/fabric: null -- a NeoForge release must
+// never wait on another loader lagging behind.
 const FORGE_FLOOR_MAJOR = 26
+const FABRIC_FLOOR_MAJOR = 26
 
 const VERSIONS_JSON = fileURLToPath(new URL('../../versions.json', import.meta.url))
 const README = fileURLToPath(new URL('../../README.md', import.meta.url))
@@ -146,6 +152,24 @@ function forgeVersionFor (minecraft, promos) {
   return build ? `${minecraft}-${build}` : null
 }
 
+/**
+ * Latest Fabric API build for a Minecraft version, from Modrinth. Fabric itself
+ * supports every Minecraft version from day one; what actually gates a target
+ * is a Fabric API build for it, since the mod's tick hook comes from there. The
+ * listing is newest-first, so the first entry is the latest.
+ */
+async function fabricApiVersionFor (minecraft) {
+  if (Number(minecraft.split('.')[0]) < FABRIC_FLOOR_MAJOR) return null
+  const versions = JSON.parse(await get(FABRIC_API_VERSIONS(minecraft)))
+  return versions[0]?.version_number ?? null
+}
+
+/** Latest stable Fabric loader. One loader serves every Minecraft version. */
+async function fabricLoaderVersion () {
+  const listing = JSON.parse(await get(FABRIC_LOADER_META))
+  return listing.find((entry) => entry.stable)?.version ?? null
+}
+
 async function discover () {
   const listing = JSON.parse(await get(NEOFORGE_VERSIONS))
   const versions = (listing.versions ?? [])
@@ -171,6 +195,7 @@ async function discover () {
       minecraft,
       neoforge: candidate.version,
       forge: forgeVersionFor(minecraft, promos),
+      fabric: await fabricApiVersionFor(minecraft),
       beta: candidate.beta,
       parchment: await parchmentFor(minecraft)
     })
@@ -178,6 +203,7 @@ async function discover () {
 
   return {
     moddev_version: latestFromMavenMetadata(await get(MODDEV_METADATA)) ?? '2.0.147',
+    fabric_loader: await fabricLoaderVersion() ?? '0.19.5',
     targets
   }
 }
@@ -186,12 +212,12 @@ function renderReadmeTable (data) {
   const rows = data.targets
     .slice()
     .reverse()
-    .map((t) => `| ${t.minecraft} | ${t.neoforge}${t.beta ? ' (beta)' : ''} | ${t.forge ?? '—'} |`)
+    .map((t) => `| ${t.minecraft} | ${t.neoforge}${t.beta ? ' (beta)' : ''} | ${t.forge ?? '—'} | ${t.fabric != null ? 'yes' : '—'} |`)
   return [
     README_START,
     '',
-    '| Minecraft | NeoForge | Forge |',
-    '| --- | --- | --- |',
+    '| Minecraft | NeoForge | Forge | Fabric |',
+    '| --- | --- | --- | --- |',
     ...rows,
     '',
     README_END
@@ -226,13 +252,17 @@ if (check) {
   const currentReadme = await readFile(README, 'utf8').catch(() => '')
   if (currentJson === serialised && currentReadme === readme) {
     console.log(`versions.json is up to date (${data.targets.length} targets).`)
-    await emitGithubOutput({ stale: false, added: '[]' })
+    await emitGithubOutput({ stale: false, added: '[]', fabric_loader: data.fabric_loader })
     process.exit(0)
   }
-  // Keyed on the (neoforge, forge) pair: a Forge-only version bump must land in
-  // `added` too, or try-build would be skipped while the file is stale and the
-  // update job's needs.try-build.result == 'success' gate would never open.
-  const key = (t) => `${t.neoforge}|${t.forge ?? ''}`
+  // What lands in `added` decides what gets try-built AND whether a release is
+  // cut, so the key is chosen deliberately: NeoForge/Forge version bumps and
+  // Fabric coverage appearing or vanishing (null <-> non-null) are release-worthy.
+  // A routine Fabric API version bump is not -- the jar declares "fabric-api": "*"
+  // and never embeds it, and Fabric API releases often enough that keying on it
+  // would spam pointless releases. Those, like parchment/loader/moddev updates,
+  // flow through the workflow's metadata-only commit path instead.
+  const key = (t) => `${t.neoforge}|${t.forge ?? ''}|${t.fabric != null}`
   const known = new Set(JSON.parse(currentJson || '{"targets":[]}').targets.map(key))
   const added = data.targets.filter((t) => !known.has(key(t)))
   console.log('versions.json is out of date.')
@@ -240,7 +270,9 @@ if (check) {
     console.log(`  new target: Minecraft ${target.minecraft} / NeoForge ${target.neoforge}`)
   }
   console.log(JSON.stringify({ added }, null, 2))
-  await emitGithubOutput({ stale: true, added: JSON.stringify(added) })
+  // fabric_loader rides along because try-build needs it for fabric targets and
+  // cannot read it from versions.json -- the checkout still has the OLD file.
+  await emitGithubOutput({ stale: true, added: JSON.stringify(added), fabric_loader: data.fabric_loader })
   // The scheduled workflow treats a non-zero exit as "there is work to do", so it
   // only signals staleness when asked to fail.
   process.exit(process.argv.includes('--soft') ? 0 : 1)

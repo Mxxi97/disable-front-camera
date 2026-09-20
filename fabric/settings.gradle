@@ -1,0 +1,20 @@
+// A standalone Gradle build, NOT a subproject of the root: fabric-loom,
+// ModDevGradle and ForgeGradle each rewire the Minecraft dependency and cannot
+// share a build. Invoke from the repo root with the shared wrapper:
+//   ./gradlew -p fabric build
+pluginManagement {
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'disable-front-camera-fabric'

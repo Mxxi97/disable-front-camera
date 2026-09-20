@@ -33,11 +33,15 @@ jobs:
       - id: matrix
         if: steps.check.outputs.stale == 'true'
         # Same per-loader expansion as build.yml: every added target is tried on
-        # NeoForge, and on Forge too when Forge has a build for it.
+        # NeoForge, and on Forge/Fabric too when those loaders have a build for
+        # it. The Fabric loader version comes from the script's output, NOT from
+        # versions.json -- this checkout still has the old file.
         run: |
-          echo '${{ steps.check.outputs.added }}' | jq -c '{include: [ .[]
-            | {minecraft, loader: "neoforge", version: .neoforge},
-              (select(.forge != null) | {minecraft, loader: "forge", version: .forge}) ]}' \
+          echo '${{ steps.check.outputs.added }}' \
+            | jq -c --arg fl "${{ steps.check.outputs.fabric_loader }}" '{include: [ .[]
+              | {minecraft, loader: "neoforge", version: .neoforge},
+                (select(.forge != null) | {minecraft, loader: "forge", version: .forge}),
+                (select(.fabric != null) | {minecraft, loader: "fabric", version: .fabric, fabric_loader: $fl}) ]}' \
             > matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
 
@@ -72,6 +76,11 @@ jobs:
           set -o pipefail
           if [ "${{ matrix.loader }}" = "forge" ]; then
             ./gradlew -p forge build --no-daemon -Pforge_version=${{ matrix.version }} 2>&1 | tee build.log
+          elif [ "${{ matrix.loader }}" = "fabric" ]; then
+            ./gradlew -p fabric build --no-daemon \
+              -Pminecraft_version=${{ matrix.minecraft }} \
+              -Pfabric_api_version=${{ matrix.version }} \
+              -Ploader_version=${{ matrix.fabric_loader }} 2>&1 | tee build.log
           else
             ./gradlew build --no-daemon -Pneo_version=${{ matrix.version }} 2>&1 | tee build.log
           fi
@@ -109,6 +118,20 @@ jobs:
               echo
               echo '```'
               echo "./gradlew -p forge build -Pforge_version=${{ matrix.version }}"
+              echo "node .github/scripts/discover-versions.mjs"
+              echo '```'
+            elif [ "${{ matrix.loader }}" = "fabric" ]; then
+              echo "The Fabric build is a single universal source tree (no per-version overlay),"
+              echo "so fix it directly in:"
+              echo
+              echo '```'
+              echo "fabric/src/main/java/drHirsch/disable_front_camera/"
+              echo '```'
+              echo
+              echo "Then verify with:"
+              echo
+              echo '```'
+              echo "./gradlew -p fabric build -Pminecraft_version=${{ matrix.minecraft }} -Pfabric_api_version=${{ matrix.version }} -Ploader_version=${{ matrix.fabric_loader }}"
               echo "node .github/scripts/discover-versions.mjs"
               echo '```'
             else
@@ -157,7 +180,12 @@ jobs:
   update:
     name: Update versions.json and release
     needs: [discover, try-build]
-    if: needs.try-build.result == 'success'
+    # try-build is 'skipped' when the change is metadata-only (no new targets):
+    # a parchment, ModDev, Fabric API or Fabric loader update. Those must still
+    # be committed -- gating on try-build success alone would leave versions.json
+    # permanently stale and this workflow reporting the same diff every day.
+    # Release-worthy changes (new targets) additionally require try-build green.
+    if: ${{ !cancelled() && needs.discover.outputs.stale == 'true' && (needs.try-build.result == 'success' || needs.try-build.result == 'skipped') }}
     runs-on: ubuntu-latest
     # Same group as cut-release.yml, so the automation can never race a manual
     # release into conflicting pushes on main.
@@ -175,11 +203,24 @@ jobs:
       - name: Regenerate versions.json and the README table
         run: node .github/scripts/discover-versions.mjs
 
+      # Metadata-only path: nothing was release-worthy, so just keep the file
+      # current. No version bump, no tag, no release.
+      - name: Commit metadata-only update
+        if: needs.discover.outputs.added == '[]'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json README.md
+          git commit -m "Update version metadata"
+          git push origin main
+
       - name: Bump mod_version
+        if: needs.discover.outputs.added != '[]'
         id: bump
         run: node .github/scripts/bump-version.mjs --bump patch
 
       - name: Commit, tag and push
+        if: needs.discover.outputs.added != '[]'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -191,6 +232,7 @@ jobs:
           git push origin main "v${{ steps.bump.outputs.version }}"
 
       - name: Dispatch the release workflow
+        if: needs.discover.outputs.added != '[]'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

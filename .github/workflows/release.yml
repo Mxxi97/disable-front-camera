@@ -54,27 +54,42 @@ jobs:
           forge=$(jq -r '[.targets[] | select(.forge != null)][0].forge // empty' versions.json)
           forge_game_versions=$(jq -r '.targets[] | select(.forge != null) | .minecraft' versions.json)
 
+          # Fabric compiles against the oldest covered Minecraft version and its
+          # Fabric API build; the loader version is global.
+          fabric_mc=$(jq -r '[.targets[] | select(.fabric != null)][0].minecraft // empty' versions.json)
+          fabric_api=$(jq -r '[.targets[] | select(.fabric != null)][0].fabric // empty' versions.json)
+          fabric_loader=$(jq -r '.fabric_loader // empty' versions.json)
+          fabric_game_versions=$(jq -r '.targets[] | select(.fabric != null) | .minecraft' versions.json)
+
           count=$(printf '%s\n' "$game_versions" | grep -c .)
           forge_count=$(printf '%s\n' "$forge_game_versions" | grep -c . || true)
+          fabric_count=$(printf '%s\n' "$fabric_game_versions" | grep -c . || true)
           if [ -z "$neoforge" ] || [ -z "$version" ] || [ "$count" -eq 0 ]; then
             echo "::error title=Empty release input::Resolved neoforge='$neoforge' version='$version' game versions=$count. Check versions.json and gradle.properties."
             exit 1
           fi
 
-          echo "NeoForge:            $neoforge"
-          echo "Forge:               ${forge:-none}"
-          echo "Version:             $version"
-          echo "Game versions:       $count"
+          echo "NeoForge:             $neoforge"
+          echo "Forge:                ${forge:-none}"
+          echo "Fabric:               ${fabric_api:-none} (MC ${fabric_mc:-–}, loader ${fabric_loader:-–})"
+          echo "Version:              $version"
+          echo "Game versions:        $count"
           printf '  %s\n' $game_versions
-          echo "Forge game versions: $forge_count"
+          echo "Forge game versions:  $forge_count"
           printf '  %s\n' $forge_game_versions
+          echo "Fabric game versions: $fabric_count"
+          printf '  %s\n' $fabric_game_versions
 
           {
             echo "neoforge=$neoforge"
             echo "forge=$forge"
+            echo "fabric_mc=$fabric_mc"
+            echo "fabric_api=$fabric_api"
+            echo "fabric_loader=$fabric_loader"
             echo "version=$version"
             echo "game_version_count=$count"
             echo "forge_game_version_count=$forge_count"
+            echo "fabric_game_version_count=$fabric_count"
             # Multi-line values need the delimiter form.
             echo "game_versions<<GAME_VERSIONS_EOF"
             printf '%s\n' "$game_versions"
@@ -82,6 +97,9 @@ jobs:
             echo "forge_game_versions<<FORGE_GAME_VERSIONS_EOF"
             printf '%s\n' "$forge_game_versions"
             echo "FORGE_GAME_VERSIONS_EOF"
+            echo "fabric_game_versions<<FABRIC_GAME_VERSIONS_EOF"
+            printf '%s\n' "$fabric_game_versions"
+            echo "FABRIC_GAME_VERSIONS_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check publishing credentials
@@ -120,6 +138,14 @@ jobs:
         if: steps.meta.outputs.forge != ''
         run: ./gradlew -p forge build --no-daemon -Pforge_version=${{ steps.meta.outputs.forge }}
 
+      - name: Build universal jar (Fabric)
+        if: steps.meta.outputs.fabric_api != ''
+        run: |
+          ./gradlew -p fabric build --no-daemon \
+            -Pminecraft_version=${{ steps.meta.outputs.fabric_mc }} \
+            -Pfabric_api_version=${{ steps.meta.outputs.fabric_api }} \
+            -Ploader_version=${{ steps.meta.outputs.fabric_loader }}
+
       - name: Sanity-check the NeoForge jar
         run: |
           jar=$(ls build/libs/*.jar)
@@ -143,6 +169,18 @@ jobs:
             | od -An -tu1 -j6 -N2 \
             | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 69) { print "::error::Expected 69 (Java 25), got " v; exit 1 }}'
           unzip -p "$jar" META-INF/mods.toml
+
+      - name: Sanity-check the Fabric jar
+        if: steps.meta.outputs.fabric_api != ''
+        run: |
+          jar=$(ls fabric/build/libs/*.jar)
+          echo "Publishing $jar"
+          # Like the Forge jar: 26.x only, so Java 25 (major version 69) is fine.
+          unzip -p "$jar" drHirsch/disable_front_camera/Disable_front_camera.class \
+            | od -An -tu1 -j6 -N2 \
+            | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 69) { print "::error::Expected 69 (Java 25), got " v; exit 1 }}'
+          # jq also validates that the placeholder expansion produced real JSON.
+          unzip -p "$jar" fabric.mod.json | jq -e '.id == "disable_front_camera"'
 
       # One mc-publish invocation per destination: each Modrinth version carries
       # exactly one loader's jar, and the GitHub release carries both. mc-publish
@@ -186,6 +224,20 @@ jobs:
           name: v${{ steps.meta.outputs.version }} (Forge)
           version-type: release
 
+      - name: Publish to Modrinth (Fabric)
+        if: steps.meta.outputs.fabric_api != ''
+        uses: Kira-NT/mc-publish@v3.3.1
+        with:
+          modrinth-id: ${{ vars.MODRINTH_ID || 'WklfOz03' }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: fabric/build/libs/*.jar
+          loaders: fabric
+          game-versions: ${{ steps.meta.outputs.fabric_game_versions }}
+          game-version-filter: none
+          version: ${{ steps.meta.outputs.version }}+fabric
+          name: v${{ steps.meta.outputs.version }} (Fabric)
+          version-type: release
+
       - name: Publish the GitHub release
         uses: Kira-NT/mc-publish@v3.3.1
         with:
@@ -193,6 +245,7 @@ jobs:
           files: |
             build/libs/*.jar
             forge/build/libs/*.jar
+            fabric/build/libs/*.jar
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
           version-type: release
@@ -206,6 +259,8 @@ jobs:
           EXPECTED_COUNT: ${{ steps.meta.outputs.game_version_count }}
           FORGE: ${{ steps.meta.outputs.forge }}
           EXPECTED_FORGE_COUNT: ${{ steps.meta.outputs.forge_game_version_count }}
+          FABRIC: ${{ steps.meta.outputs.fabric_api }}
+          EXPECTED_FABRIC_COUNT: ${{ steps.meta.outputs.fabric_game_version_count }}
         run: |
           published=$(curl -sS "https://api.modrinth.com/v2/project/WklfOz03/version")
           echo "$published" | jq -r '.[] | "\(.version_number)  loaders=\(.loaders|join(","))  versions=\(.game_versions|length)"'
@@ -233,6 +288,9 @@ jobs:
           check "$EXPECTED_VERSION" neoforge "$EXPECTED_COUNT"
           if [ -n "$FORGE" ]; then
             check "${EXPECTED_VERSION}+forge" forge "$EXPECTED_FORGE_COUNT"
+          fi
+          if [ -n "$FABRIC" ]; then
+            check "${EXPECTED_VERSION}+fabric" fabric "$EXPECTED_FABRIC_COUNT"
           fi
 
   # Releases are usually started by the daily automation with GITHUB_TOKEN, and

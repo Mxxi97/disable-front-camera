@@ -1,0 +1,24 @@
+{
+  "_comment": "Mod metadata for the FABRIC jar. The dollar-brace placeholders are expanded by processResources in fabric/build.gradle -- unlike the other loaders this cannot be a build/generated template, because Loom parses this file straight from the source tree at configuration time. Like the other loaders this is a single universal jar: one build covers every supported 26.x version, so the ranges are deliberately wide rather than pinned to whichever versions produced the jar. Releases compile against the OLDEST supported target so nothing newer than the whole range offers can be referenced. Ranges use fabric.mod.json's semver dialect, not maven syntax.",
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${mod_version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "authors": [
+    "${mod_authors}"
+  ],
+  "license": "${mod_license}",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "drHirsch.disable_front_camera.Disable_front_camera"
+    ]
+  },
+  "depends": {
+    "fabricloader": "${fabric_loader_range}",
+    "minecraft": "${fabric_minecraft_version_range}",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
