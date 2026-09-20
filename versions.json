@@ -1,99 +1,116 @@
 {
   "moddev_version": "2.0.147",
+  "fabric_loader": "0.19.5",
   "targets": [
     {
       "minecraft": "1.21.1",
       "neoforge": "21.1.251",
+      "fabric": null,
       "beta": false,
       "parchment": "2024.11.17"
     },
     {
       "minecraft": "1.21.2",
       "neoforge": "21.2.1-beta",
+      "fabric": null,
       "beta": true,
       "parchment": null
     },
     {
       "minecraft": "1.21.3",
       "neoforge": "21.3.97",
+      "fabric": null,
       "beta": false,
       "parchment": "2024.12.07"
     },
     {
       "minecraft": "1.21.4",
       "neoforge": "21.4.157",
+      "fabric": null,
       "beta": false,
       "parchment": "2025.03.23"
     },
     {
       "minecraft": "1.21.5",
       "neoforge": "21.5.98",
+      "fabric": null,
       "beta": false,
       "parchment": "2025.06.15"
     },
     {
       "minecraft": "1.21.6",
       "neoforge": "21.6.20-beta",
+      "fabric": null,
       "beta": true,
       "parchment": "2025.06.29"
     },
     {
       "minecraft": "1.21.7",
       "neoforge": "21.7.25-beta",
+      "fabric": null,
       "beta": true,
       "parchment": "2025.07.18"
     },
     {
       "minecraft": "1.21.8",
       "neoforge": "21.8.54",
+      "fabric": null,
       "beta": false,
       "parchment": "2025.09.14"
     },
     {
       "minecraft": "1.21.9",
       "neoforge": "21.9.16-beta",
+      "fabric": null,
       "beta": true,
       "parchment": "2025.10.05"
     },
     {
       "minecraft": "1.21.10",
       "neoforge": "21.10.64",
+      "fabric": null,
       "beta": false,
       "parchment": "2025.10.12"
     },
     {
       "minecraft": "1.21.11",
       "neoforge": "21.11.45",
+      "fabric": null,
       "beta": false,
       "parchment": "2025.12.20"
     },
     {
       "minecraft": "26.1",
       "neoforge": "26.1.0.19-beta",
+      "fabric": "0.155.3+26.1.2",
       "beta": true,
       "parchment": null
     },
     {
       "minecraft": "26.1.1",
       "neoforge": "26.1.1.15-beta",
+      "fabric": "0.155.3+26.1.2",
       "beta": true,
       "parchment": null
     },
     {
       "minecraft": "26.1.2",
       "neoforge": "26.1.2.109",
+      "fabric": "0.155.3+26.1.2",
       "beta": false,
       "parchment": null
     },
     {
       "minecraft": "26.2",
       "neoforge": "26.2.0.88",
+      "fabric": "0.161.0+26.2",
       "beta": false,
       "parchment": null
     },
     {
       "minecraft": "26.3",
       "neoforge": "26.3.0.7-beta",
+      "fabric": "0.161.0+26.3",
       "beta": true,
       "parchment": null
     }

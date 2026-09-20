@@ -32,7 +32,17 @@ jobs:
 
       - id: matrix
         if: steps.check.outputs.stale == 'true'
-        run: echo "matrix={\"include\":${{ steps.check.outputs.added }}}" >> "$GITHUB_OUTPUT"
+        # Same per-loader expansion as build.yml: every added target is tried on
+        # NeoForge, and on Fabric too when Fabric API has a build for it. The
+        # Fabric loader version comes from the script's output, NOT from
+        # versions.json -- this checkout still has the old file.
+        run: |
+          echo '${{ steps.check.outputs.added }}' \
+            | jq -c --arg fl "${{ steps.check.outputs.fabric_loader }}" '{include: [ .[]
+              | {minecraft, loader: "neoforge", version: .neoforge},
+                (select(.fabric != null) | {minecraft, loader: "fabric", version: .fabric, fabric_loader: $fl}) ]}' \
+            > matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
 
       - name: Nothing to do
         if: steps.check.outputs.stale != 'true'
@@ -41,7 +51,7 @@ jobs:
   # New versions are built before anything is committed, so versions.json never
   # gains a target that does not compile.
   try-build:
-    name: Try MC ${{ matrix.minecraft }}
+    name: Try MC ${{ matrix.minecraft }} (${{ matrix.loader }})
     needs: discover
     if: needs.discover.outputs.stale == 'true' && needs.discover.outputs.added != '[]'
     runs-on: ubuntu-latest
@@ -63,13 +73,20 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          ./gradlew build --no-daemon -Pneo_version=${{ matrix.neoforge }} 2>&1 | tee build.log
+          if [ "${{ matrix.loader }}" = "fabric" ]; then
+            ./gradlew -p fabric build --no-daemon \
+              -Pminecraft_version=${{ matrix.minecraft }} \
+              -Pfabric_api_version=${{ matrix.version }} \
+              -Ploader_version=${{ matrix.fabric_loader }} 2>&1 | tee build.log
+          else
+            ./gradlew build --no-daemon -Pneo_version=${{ matrix.version }} 2>&1 | tee build.log
+          fi
 
       - name: Open an issue if it no longer compiles
         if: steps.build.outcome != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: "Port to Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})"
+          TITLE: "Port to Minecraft ${{ matrix.minecraft }} (${{ matrix.loader }} ${{ matrix.version }})"
         run: |
           # Don't file the same issue every week.
           existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')
@@ -79,26 +96,42 @@ jobs:
           fi
 
           {
-            echo "Minecraft **${{ matrix.minecraft }}** is out and NeoForge **${{ matrix.neoforge }}** is available,"
+            echo "Minecraft **${{ matrix.minecraft }}** is out and ${{ matrix.loader }} **${{ matrix.version }}** is available,"
             echo "but the mod no longer compiles against it, so it was not added to \`versions.json\`."
             echo
-            echo "Every other supported version is unaffected and still builds."
+            echo "Every other supported version and loader is unaffected and still builds."
             echo
             echo "### How to fix"
             echo
-            echo "Put a replacement for whichever source file broke in:"
-            echo
-            echo '```'
-            echo "src/versions/${{ matrix.minecraft }}/java/drHirsch/disable_front_camera/"
-            echo '```'
-            echo
-            echo "A file there replaces the same-named file under \`src/main/java\` for this"
-            echo "version only. Then run:"
-            echo
-            echo '```'
-            echo "node .github/scripts/build-all.mjs --only ${{ matrix.neoforge }}"
-            echo "node .github/scripts/discover-versions.mjs"
-            echo '```'
+            if [ "${{ matrix.loader }}" = "fabric" ]; then
+              echo "The Fabric build is a single universal source tree (no per-version overlay),"
+              echo "so fix it directly in:"
+              echo
+              echo '```'
+              echo "fabric/src/main/java/drHirsch/disable_front_camera/"
+              echo '```'
+              echo
+              echo "Then verify with:"
+              echo
+              echo '```'
+              echo "./gradlew -p fabric build -Pminecraft_version=${{ matrix.minecraft }} -Pfabric_api_version=${{ matrix.version }} -Ploader_version=${{ matrix.fabric_loader }}"
+              echo "node .github/scripts/discover-versions.mjs"
+              echo '```'
+            else
+              echo "Put a replacement for whichever source file broke in:"
+              echo
+              echo '```'
+              echo "src/versions/${{ matrix.minecraft }}/java/drHirsch/disable_front_camera/"
+              echo '```'
+              echo
+              echo "A file there replaces the same-named file under \`src/main/java\` for this"
+              echo "version only. Then run:"
+              echo
+              echo '```'
+              echo "node .github/scripts/build-all.mjs --only ${{ matrix.version }}"
+              echo "node .github/scripts/discover-versions.mjs"
+              echo '```'
+            fi
             echo
             echo "### Compile errors"
             echo
@@ -130,7 +163,12 @@ jobs:
   update:
     name: Update versions.json and release
     needs: [discover, try-build]
-    if: needs.try-build.result == 'success'
+    # try-build is 'skipped' when the change is metadata-only (no new targets):
+    # a parchment, ModDev, Fabric API or Fabric loader update. Those must still
+    # be committed -- gating on try-build success alone would leave versions.json
+    # permanently stale and this workflow reporting the same diff every day.
+    # Release-worthy changes (new targets) additionally require try-build green.
+    if: ${{ !cancelled() && needs.discover.outputs.stale == 'true' && (needs.try-build.result == 'success' || needs.try-build.result == 'skipped') }}
     runs-on: ubuntu-latest
     # Same group as cut-release.yml, so the automation can never race a manual
     # release into conflicting pushes on main.
@@ -148,11 +186,24 @@ jobs:
       - name: Regenerate versions.json and the README table
         run: node .github/scripts/discover-versions.mjs
 
+      # Metadata-only path: nothing was release-worthy, so just keep the file
+      # current. No version bump, no tag, no release.
+      - name: Commit metadata-only update
+        if: needs.discover.outputs.added == '[]'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json README.md
+          git commit -m "Update version metadata"
+          git push origin main
+
       - name: Bump mod_version
+        if: needs.discover.outputs.added != '[]'
         id: bump
         run: node .github/scripts/bump-version.mjs --bump patch
 
       - name: Commit, tag and push
+        if: needs.discover.outputs.added != '[]'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -164,6 +215,7 @@ jobs:
           git push origin main "v${{ steps.bump.outputs.version }}"
 
       - name: Dispatch the release workflow
+        if: needs.discover.outputs.added != '[]'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -1,0 +1,72 @@
+plugins {
+    id 'java'
+    id 'idea'
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+// The mod's identity lives in the ROOT gradle.properties, shared with the other
+// loaders, so bump-version.mjs and the metadata templates have a single source
+// of truth. This build's own gradle.properties only carries the Fabric version
+// axes and the Fabric-dialect ranges.
+def shared = new Properties()
+file('../gradle.properties').withInputStream { shared.load(it) }
+def prop = { String name ->
+    def value = shared.getProperty(name)
+    if (value == null) throw new GradleException("Missing ${name} in ../gradle.properties")
+    value
+}
+
+group = prop('mod_group_id')
+version = prop('mod_version')
+def modId = prop('mod_id')
+
+base {
+    // Distinct from the other loaders' jars, so the artifacts can never be
+    // confused on Modrinth or in a mods folder.
+    archivesName = "${modId}-fabric"
+}
+
+// Every supported Fabric target (Minecraft 26.1+) runs on Java 25, so unlike
+// the NeoForge build there is nothing to derive: 26.x is the whole range.
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+// Minecraft 26.x ships unobfuscated, so there is no mappings/remapping step:
+// Minecraft, the loader and the Fabric API are plain dependencies, exactly as
+// in the upstream fabric-example-mod for these versions.
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// Expands the ${...} placeholders in fabric.mod.json -- fed from both property
+// files: identity from the shared one, ranges from the Fabric-specific one.
+// Unlike the other loaders this happens in processResources on the real
+// resource file rather than a generated template directory, because Loom parses
+// fabric.mod.json straight from the source tree at configuration time and would
+// choke on a file that only exists after a task has run.
+processResources {
+    var replaceProperties = [fabric_minecraft_version_range: fabric_minecraft_version_range,
+                             fabric_loader_range           : fabric_loader_range,
+                             mod_id                        : modId,
+                             mod_name                      : prop('mod_name'),
+                             mod_license                   : prop('mod_license'),
+                             mod_version                   : prop('mod_version'),
+                             mod_authors                   : prop('mod_authors'),
+                             mod_description               : prop('mod_description')]
+    inputs.properties replaceProperties
+    filesMatching('fabric.mod.json') {
+        expand replaceProperties
+    }
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
