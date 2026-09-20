@@ -30,7 +30,27 @@ jobs:
           # is not true, so this direction matters.
           echo "neoforge=$(jq -r '.targets[0].neoforge' versions.json)" >> "$GITHUB_OUTPUT"
           echo "game-versions=$(jq -r '[.targets[].minecraft] | join(",")' versions.json)" >> "$GITHUB_OUTPUT"
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          # From gradle.properties, not the tag name, so that a manual
+          # workflow_dispatch run does not try to publish a version called "main".
+          echo "version=$(sed -n 's/^mod_version=//p' gradle.properties)" >> "$GITHUB_OUTPUT"
+
+      - name: Check publishing credentials
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          if [ -z "$MODRINTH_TOKEN" ]; then
+            echo "::error title=Missing MODRINTH_TOKEN::Add it under Settings > Secrets and variables > Actions > Secrets."
+            exit 1
+          fi
+          # Fail here with a clear message rather than deep inside mc-publish, which
+          # reports credential problems only after the jar has already been built.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: $MODRINTH_TOKEN" https://api.modrinth.com/v2/user)
+          if [ "$code" != "200" ]; then
+            echo "::error title=MODRINTH_TOKEN rejected::Modrinth returned HTTP $code. The token is invalid, expired, or lacks the 'Create versions' scope."
+            exit 1
+          fi
+          echo "MODRINTH_TOKEN is valid."
 
       - uses: actions/setup-java@v4
         with:
@@ -55,7 +75,12 @@ jobs:
 
       - uses: Kira-NT/mc-publish@v3.3.1
         with:
-          modrinth-id: ${{ vars.MODRINTH_ID }}
+          # The Modrinth slug is public (it is in the project URL), so it is set here
+          # rather than in repository config. An empty modrinth-id makes mc-publish
+          # fail before it publishes anything, and a repo variable is easy to get
+          # wrong -- it must be a Variable, not a Secret. vars.MODRINTH_ID still
+          # overrides this if it is ever set.
+          modrinth-id: ${{ vars.MODRINTH_ID || 'disable-front-camera' }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           files: build/libs/*.jar
