@@ -1,0 +1,92 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      targets:
+        description: JSON array of targets to build. Defaults to everything in versions.json.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  targets:
+    name: Resolve targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        run: |
+          if [ -n "${{ inputs.targets }}" ]; then
+            echo '${{ inputs.targets }}' > targets.json
+          else
+            jq '.targets' versions.json > targets.json
+          fi
+          echo "matrix=$(jq -c '{include: .}' targets.json)" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "  \(.minecraft) <- NeoForge \(.neoforge)"' targets.json
+
+  build:
+    name: MC ${{ matrix.minecraft }}
+    needs: targets
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both toolchains, because Minecraft 1.21.x needs Java 21 and 26.x needs 25.
+      # build.gradle picks the right one from the NeoForge version, so this job
+      # does not need to know which is which.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            25
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Parchment is deliberately not passed: it only affects decompiled Minecraft
+      # sources during development and has no effect on the jar.
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: ./gradlew build --no-daemon -Pneo_version=${{ matrix.neoforge }}
+
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
+        with:
+          name: disable_front_camera-mc${{ matrix.minecraft }}
+          path: build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Report
+        run: |
+          if [ "${{ steps.build.outcome }}" != "success" ]; then
+            echo "::error title=Build failed::Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})"
+            echo "- FAILED Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "- ok Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})" >> "$GITHUB_STEP_SUMMARY"
+
+  result:
+    name: All targets
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any target failed
+        if: needs.build.result != 'success'
+        run: |
+          echo "At least one target failed to build. See the matrix jobs above."
+          exit 1
+      - run: echo "Every target built."

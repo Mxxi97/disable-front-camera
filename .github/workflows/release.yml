@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # The full matrix is the release gate. One universal jar is only safe to publish
+  # because every supported version has just been proven to compile.
+  verify:
+    name: Verify all versions
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Publish
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          # Build against the OLDEST supported NeoForge. The bytecode is identical
+          # across the range, and the oldest toolchain emits Java 21 class files,
+          # which the Java 25 JVM used by Minecraft 26.x loads happily. The reverse
+          # is not true, so this direction matters.
+          echo "neoforge=$(jq -r '.targets[0].neoforge' versions.json)" >> "$GITHUB_OUTPUT"
+          echo "game-versions=$(jq -r '[.targets[].minecraft] | join(",")' versions.json)" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build universal jar
+        run: ./gradlew build --no-daemon -Pneo_version=${{ steps.meta.outputs.neoforge }}
+
+      - name: Sanity-check the jar
+        run: |
+          jar=$(ls build/libs/*.jar)
+          echo "Publishing $jar"
+          # Java 21 bytecode is class-file major version 65. Anything higher would
+          # fail to load on the 1.21.x half of the supported range.
+          unzip -p "$jar" drHirsch/disable_front_camera/Disable_front_camera.class \
+            | od -An -tu1 -j6 -N2 \
+            | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 65) { print "::error::Expected 65 (Java 21), got " v; exit 1 }}'
+          unzip -p "$jar" META-INF/neoforge.mods.toml
+
+      - uses: Kira-NT/mc-publish@v3.3.1
+        with:
+          modrinth-id: ${{ vars.MODRINTH_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          files: build/libs/*.jar
+          loaders: neoforge
+          # Every version the matrix just verified, listed explicitly rather than
+          # inferred from the jar's version range.
+          game-versions: ${{ steps.meta.outputs.game-versions }}
+          game-version-filter: none
+          version: ${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
+          version-type: release
