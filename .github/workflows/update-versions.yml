@@ -2,14 +2,15 @@ name: Check for new Minecraft versions
 
 on:
   schedule:
-    # Mondays, 06:00 UTC.
-    - cron: '0 6 * * 1'
+    # Daily, 06:00 UTC. Cheap: only the single-runner discover job runs on a
+    # quiet day; try-build and update only start when a new version appeared.
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
-  pull-requests: write
   issues: write
+  actions: write # the update job dispatches release.yml
 
 jobs:
   discover:
@@ -121,13 +122,25 @@ jobs:
 
   # Only if every new target built. If one failed, its issue is the signal, and the
   # next scheduled run will pick things up once it has been ported.
+  #
+  # This is the zero-touch path: no PR, no human. try-build has just proven every
+  # new target compiles, so the update is committed straight to main, the version
+  # is bumped, and the release workflow is dispatched -- the mod appears on
+  # Modrinth with the new game versions without anyone touching the repo.
   update:
-    name: Update versions.json
+    name: Update versions.json and release
     needs: [discover, try-build]
     if: needs.try-build.result == 'success'
     runs-on: ubuntu-latest
+    # Same group as cut-release.yml, so the automation can never race a manual
+    # release into conflicting pushes on main.
+    concurrency: cut-release
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The bump script skips versions whose tag already exists, so it needs
+          # the full tag list, which a shallow checkout does not have.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -135,18 +148,32 @@ jobs:
       - name: Regenerate versions.json and the README table
         run: node .github/scripts/discover-versions.mjs
 
-      - uses: peter-evans/create-pull-request@v7
-        with:
-          branch: chore/new-minecraft-versions
-          title: Support new Minecraft versions
-          commit-message: Add newly released Minecraft/NeoForge targets
-          body: |
-            New NeoForge builds are available and the mod compiles against all of them.
+      - name: Bump mod_version
+        id: bump
+        run: node .github/scripts/bump-version.mjs --bump patch
 
-            Merging this adds them to `versions.json`, which is what the build matrix
-            and the release workflow read, so the next tagged release will publish jars
-            for them too.
+      - name: Commit, tag and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json README.md gradle.properties
+          git commit -m "Support new Minecraft versions; release v${{ steps.bump.outputs.version }}"
+          # Tag the bump commit itself so the tag's gradle.properties always
+          # matches the tag name -- releases publish what gradle.properties says.
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin main "v${{ steps.bump.outputs.version }}"
 
-            Verified by the `try-build` job on this run before the PR was opened.
-          labels: dependencies
-          delete-branch: true
+      - name: Dispatch the release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The tag push above cannot trigger release.yml: events created with
+          # GITHUB_TOKEN never start other workflows. workflow_dispatch is the
+          # documented exception, and dispatching AT THE TAG REF makes release.yml
+          # check out the freshly committed versions.json and gradle.properties.
+          gh workflow run release.yml --ref "v${{ steps.bump.outputs.version }}"
+          {
+            echo "Released **v${{ steps.bump.outputs.version }}** with the new game versions."
+            echo
+            echo "Publishing runs in the [Release workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/release.yml)."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,80 @@
+name: Cut release
+
+# Manual releases only. The daily automation in update-versions.yml runs the same
+# bump/tag/dispatch sequence on its own when a new Minecraft version appears; this
+# workflow exists for releasing code changes (bug fixes, ports) by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Exact version override (e.g. 1.2.0). Leave empty to use the bump type.
+        required: false
+
+permissions:
+  contents: write # push the bump commit and the tag
+  actions: write # dispatch release.yml
+
+# Shared with the update job in update-versions.yml so two releases can never
+# race each other into conflicting pushes on main.
+concurrency: cut-release
+
+jobs:
+  cut:
+    name: Bump, tag and dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to release from anything but main
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error title=Wrong branch::Releases are cut from main, not ${{ github.ref_name }}."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          # The bump script skips versions whose tag already exists, so it needs
+          # the full tag list, which a shallow checkout does not have.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Bump mod_version
+        id: bump
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            node .github/scripts/bump-version.mjs --set "${{ inputs.version }}"
+          else
+            node .github/scripts/bump-version.mjs --bump "${{ inputs.bump }}"
+          fi
+
+      - name: Commit, tag and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gradle.properties
+          git commit -m "Release v${{ steps.bump.outputs.version }}"
+          # Tag the bump commit itself so the tag's gradle.properties always
+          # matches the tag name -- releases publish what gradle.properties says.
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin main "v${{ steps.bump.outputs.version }}"
+
+      - name: Dispatch the release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The tag push above cannot trigger release.yml: events created with
+          # GITHUB_TOKEN never start other workflows. workflow_dispatch is the
+          # documented exception, and dispatching AT THE TAG REF makes release.yml
+          # check out the bumped gradle.properties rather than old main.
+          gh workflow run release.yml --ref "v${{ steps.bump.outputs.version }}"
+          {
+            echo "Released **v${{ steps.bump.outputs.version }}**."
+            echo
+            echo "Publishing runs in the [Release workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/release.yml)."
+          } >> "$GITHUB_STEP_SUMMARY"

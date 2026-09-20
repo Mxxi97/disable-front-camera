@@ -1,8 +1,10 @@
 name: Build
 
+# No push trigger: PRs already run this same matrix before merge, release.yml
+# re-runs it as the publish gate, and the automation's own commits to main are
+# made with GITHUB_TOKEN, which never starts workflows anyway. A push trigger
+# would only burn a 16-job matrix on every merge for a third verification.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write # the notify job files an issue when a release fails
 
 jobs:
   # The full matrix is the release gate. One universal jar is only safe to publish
@@ -19,6 +20,8 @@ jobs:
     name: Publish
     needs: verify
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -150,3 +153,41 @@ jobs:
           fi
 
           echo "Published $EXPECTED_VERSION to Modrinth for $count Minecraft versions."
+
+  # Releases are usually started by the daily automation with GITHUB_TOKEN, and
+  # nobody gets a failure email for those runs. An issue is the only signal the
+  # maintainer actually sees, matching how update-versions.yml reports ports.
+  notify-failure:
+    name: File an issue on failure
+    needs: [verify, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open an issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Falls back to the ref (the vX.Y.Z tag) when publish failed before its
+          # meta step could resolve the version from gradle.properties.
+          VERSION: ${{ needs.publish.outputs.version || github.ref_name }}
+        run: |
+          TITLE="Release $VERSION failed"
+
+          # Don't file the same issue on every retry of the same version.
+          existing=$(gh issue list -R "${{ github.repository }}" --state open \
+            --search "$TITLE in:title" --json number --jq 'length')
+          if [ "$existing" != "0" ]; then
+            echo "An open issue already tracks this failed release."
+            exit 0
+          fi
+
+          {
+            echo "Publishing **$VERSION** failed."
+            echo
+            echo "See the run for details:"
+            echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "Once the cause is fixed, re-run the release from the Actions tab"
+            echo "(Release > Run workflow at ref \`${{ github.ref_name }}\`)."
+          } > issue.md
+
+          gh issue create -R "${{ github.repository }}" --title "$TITLE" --body-file issue.md
