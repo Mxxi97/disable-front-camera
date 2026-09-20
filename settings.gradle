@@ -1,11 +1,18 @@
 pluginManagement {
     repositories {
-        mavenLocal()
         gradlePluginPortal()
-        maven { url = 'https://maven.neoforged.net/releases' }
+    }
+
+    // The ModDevGradle version is a property so CI can pin or bump it per build
+    // (-Pmoddev_version=..., or ORG_GRADLE_PROJECT_moddev_version=...). build.gradle
+    // then declares the plugin without a version.
+    plugins {
+        id 'net.neoforged.moddev' version providers.gradleProperty('moddev_version').getOrElse('2.0.147')
     }
 }
 
 plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
+
+rootProject.name = 'disable-front-camera'

@@ -1,0 +1,142 @@
+name: Check for new Minecraft versions
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  discover:
+    name: Discover
+    runs-on: ubuntu-latest
+    outputs:
+      stale: ${{ steps.check.outputs.stale }}
+      added: ${{ steps.check.outputs.added }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compare versions.json against the NeoForge maven
+        id: check
+        run: node .github/scripts/discover-versions.mjs --check --soft
+
+      - id: matrix
+        if: steps.check.outputs.stale == 'true'
+        run: echo "matrix={\"include\":${{ steps.check.outputs.added }}}" >> "$GITHUB_OUTPUT"
+
+      - name: Nothing to do
+        if: steps.check.outputs.stale != 'true'
+        run: echo "Already building against every available NeoForge version." >> "$GITHUB_STEP_SUMMARY"
+
+  # New versions are built before anything is committed, so versions.json never
+  # gains a target that does not compile.
+  try-build:
+    name: Try MC ${{ matrix.minecraft }}
+    needs: discover
+    if: needs.discover.outputs.stale == 'true' && needs.discover.outputs.added != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ./gradlew build --no-daemon -Pneo_version=${{ matrix.neoforge }} 2>&1 | tee build.log
+
+      - name: Open an issue if it no longer compiles
+        if: steps.build.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: "Port to Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})"
+        run: |
+          # Don't file the same issue every week.
+          existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')
+          if [ "$existing" != "0" ]; then
+            echo "An open issue already tracks this version."
+            exit 0
+          fi
+
+          {
+            echo "Minecraft **${{ matrix.minecraft }}** is out and NeoForge **${{ matrix.neoforge }}** is available,"
+            echo "but the mod no longer compiles against it, so it was not added to \`versions.json\`."
+            echo
+            echo "Every other supported version is unaffected and still builds."
+            echo
+            echo "### How to fix"
+            echo
+            echo "Put a replacement for whichever source file broke in:"
+            echo
+            echo '```'
+            echo "src/versions/${{ matrix.minecraft }}/java/drHirsch/disable_front_camera/"
+            echo '```'
+            echo
+            echo "A file there replaces the same-named file under \`src/main/java\` for this"
+            echo "version only. Then run:"
+            echo
+            echo '```'
+            echo "node .github/scripts/build-all.mjs --only ${{ matrix.neoforge }}"
+            echo "node .github/scripts/discover-versions.mjs"
+            echo '```'
+            echo
+            echo "### Compile errors"
+            echo
+            echo '```'
+            grep -E '^(e: |error:|.*\.java:[0-9]+:|> Task .* FAILED|FAILURE:|Caused by:)' build.log | head -40 || tail -40 build.log
+            echo '```'
+          } > issue.md
+
+          gh issue create --title "$TITLE" --body-file issue.md --label "version-port" || \
+            gh issue create --title "$TITLE" --body-file issue.md
+
+  # Only if every new target built. If one failed, its issue is the signal, and the
+  # next scheduled run will pick things up once it has been ported.
+  update:
+    name: Update versions.json
+    needs: [discover, try-build]
+    if: needs.try-build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Regenerate versions.json and the README table
+        run: node .github/scripts/discover-versions.mjs
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/new-minecraft-versions
+          title: Support new Minecraft versions
+          commit-message: Add newly released Minecraft/NeoForge targets
+          body: |
+            New NeoForge builds are available and the mod compiles against all of them.
+
+            Merging this adds them to `versions.json`, which is what the build matrix
+            and the release workflow read, so the next tagged release will publish jars
+            for them too.
+
+            Verified by the `try-build` job on this run before the PR was opened.
+          labels: dependencies
+          delete-branch: true
