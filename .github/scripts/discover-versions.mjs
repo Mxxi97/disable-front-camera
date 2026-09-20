@@ -26,8 +26,6 @@ const PARCHMENT_METADATA = (mc) =>
   `https://maven.parchmentmc.org/org/parchmentmc/data/parchment-${mc}/maven-metadata.xml`
 const MODDEV_METADATA =
   'https://plugins.gradle.org/m2/net/neoforged/moddev/net.neoforged.moddev.gradle.plugin/maven-metadata.xml'
-const FORGE_PROMOTIONS =
-  'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json'
 const FABRIC_LOADER_META = 'https://meta.fabricmc.net/v2/versions/loader'
 // P7dR8mSH is the immutable Modrinth project id of Fabric API.
 const FABRIC_API_VERSIONS = (mc) =>
@@ -37,13 +35,11 @@ const FABRIC_API_VERSIONS = (mc) =>
 // (There is deliberately no 21.2 series -- NeoForge skipped Minecraft 1.21.2.)
 const FLOOR_SERIES = [21, 1]
 
-// Forge and Fabric support deliberately start at the calendar versions (26.x):
-// the 1.21.x line would need the pre-rewrite Forge APIs / intermediary-remapped
-// Fabric builds and a Java 21 toolchain, and NeoForge already covers those
-// players. Targets below this floor, or whose Minecraft version a loader has
-// not shipped for yet, carry forge/fabric: null -- a NeoForge release must
-// never wait on another loader lagging behind.
-const FORGE_FLOOR_MAJOR = 26
+// Fabric support deliberately starts at the calendar versions (26.x): the
+// 1.21.x line would need intermediary-remapped builds per version and a Java 21
+// toolchain, and NeoForge already covers those players. Targets below this
+// floor, or whose Minecraft version Fabric API has not shipped for yet, carry
+// fabric: null -- a NeoForge release must never wait on Fabric lagging behind.
 const FABRIC_FLOOR_MAJOR = 26
 
 const VERSIONS_JSON = fileURLToPath(new URL('../../versions.json', import.meta.url))
@@ -140,19 +136,6 @@ async function parchmentFor (minecraftVersion) {
 }
 
 /**
- * Latest Forge build per Minecraft version, from Forge's promotions file. Keys
- * there are "<minecraft>-latest" / "<minecraft>-recommended" with just the build
- * number as the value; "latest" is used to mirror how the NeoForge side always
- * tracks the newest build of each series. Returns the full maven artifact
- * version ("26.2-65.1.3"), which is what -Pforge_version expects.
- */
-function forgeVersionFor (minecraft, promos) {
-  if (Number(minecraft.split('.')[0]) < FORGE_FLOOR_MAJOR) return null
-  const build = promos[`${minecraft}-latest`]
-  return build ? `${minecraft}-${build}` : null
-}
-
-/**
  * Latest Fabric API build for a Minecraft version, from Modrinth. Fabric itself
  * supports every Minecraft version from day one; what actually gates a target
  * is a Fabric API build for it, since the mod's tick hook comes from there. The
@@ -186,15 +169,12 @@ async function discover () {
     .sort(([a], [b]) => compareSeries(a, b))
     .map(([, candidates]) => pickBest(candidates))
 
-  const promos = JSON.parse(await get(FORGE_PROMOTIONS)).promos ?? {}
-
   const targets = []
   for (const candidate of chosen) {
     const minecraft = await minecraftVersionFor(candidate.version)
     targets.push({
       minecraft,
       neoforge: candidate.version,
-      forge: forgeVersionFor(minecraft, promos),
       fabric: await fabricApiVersionFor(minecraft),
       beta: candidate.beta,
       parchment: await parchmentFor(minecraft)
@@ -212,12 +192,12 @@ function renderReadmeTable (data) {
   const rows = data.targets
     .slice()
     .reverse()
-    .map((t) => `| ${t.minecraft} | ${t.neoforge}${t.beta ? ' (beta)' : ''} | ${t.forge ?? '—'} | ${t.fabric != null ? 'yes' : '—'} |`)
+    .map((t) => `| ${t.minecraft} | ${t.neoforge}${t.beta ? ' (beta)' : ''} | ${t.fabric != null ? 'yes' : '—'} |`)
   return [
     README_START,
     '',
-    '| Minecraft | NeoForge | Forge | Fabric |',
-    '| --- | --- | --- | --- |',
+    '| Minecraft | NeoForge | Fabric |',
+    '| --- | --- | --- |',
     ...rows,
     '',
     README_END
@@ -256,13 +236,13 @@ if (check) {
     process.exit(0)
   }
   // What lands in `added` decides what gets try-built AND whether a release is
-  // cut, so the key is chosen deliberately: NeoForge/Forge version bumps and
-  // Fabric coverage appearing or vanishing (null <-> non-null) are release-worthy.
+  // cut, so the key is chosen deliberately: NeoForge version bumps and Fabric
+  // coverage appearing or vanishing (null <-> non-null) are release-worthy.
   // A routine Fabric API version bump is not -- the jar declares "fabric-api": "*"
   // and never embeds it, and Fabric API releases often enough that keying on it
   // would spam pointless releases. Those, like parchment/loader/moddev updates,
   // flow through the workflow's metadata-only commit path instead.
-  const key = (t) => `${t.neoforge}|${t.forge ?? ''}|${t.fabric != null}`
+  const key = (t) => `${t.neoforge}|${t.fabric != null}`
   const known = new Set(JSON.parse(currentJson || '{"targets":[]}').targets.map(key))
   const added = data.targets.filter((t) => !known.has(key(t)))
   console.log('versions.json is out of date.')
@@ -282,5 +262,5 @@ await writeFile(VERSIONS_JSON, serialised)
 await writeFile(README, readme)
 console.log(`Wrote versions.json with ${data.targets.length} targets.`)
 for (const target of data.targets) {
-  console.log(`  ${target.minecraft.padEnd(9)} <- NeoForge ${target.neoforge}${target.forge ? ` / Forge ${target.forge}` : ''}`)
+  console.log(`  ${target.minecraft.padEnd(9)} <- NeoForge ${target.neoforge}${target.fabric ? ' / Fabric' : ''}`)
 }

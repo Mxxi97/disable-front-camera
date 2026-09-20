@@ -46,23 +46,17 @@ jobs:
           # looked perfectly populated in the run log.
           game_versions=$(jq -r '.targets[].minecraft' versions.json)
 
-          # The Forge jar has its own, narrower axis: oldest supported Forge (same
-          # oldest-first reasoning) and only the game versions Forge covers. Both
-          # may be empty if Forge ever drops out of versions.json entirely -- the
-          # Forge steps below are skipped in that case rather than failing the
-          # NeoForge release.
-          forge=$(jq -r '[.targets[] | select(.forge != null)][0].forge // empty' versions.json)
-          forge_game_versions=$(jq -r '.targets[] | select(.forge != null) | .minecraft' versions.json)
-
           # Fabric compiles against the oldest covered Minecraft version and its
-          # Fabric API build; the loader version is global.
+          # Fabric API build (same oldest-first reasoning); the loader version is
+          # global. All of these may be empty if Fabric ever drops out of
+          # versions.json entirely -- the Fabric steps below are skipped in that
+          # case rather than failing the NeoForge release.
           fabric_mc=$(jq -r '[.targets[] | select(.fabric != null)][0].minecraft // empty' versions.json)
           fabric_api=$(jq -r '[.targets[] | select(.fabric != null)][0].fabric // empty' versions.json)
           fabric_loader=$(jq -r '.fabric_loader // empty' versions.json)
           fabric_game_versions=$(jq -r '.targets[] | select(.fabric != null) | .minecraft' versions.json)
 
           count=$(printf '%s\n' "$game_versions" | grep -c .)
-          forge_count=$(printf '%s\n' "$forge_game_versions" | grep -c . || true)
           fabric_count=$(printf '%s\n' "$fabric_game_versions" | grep -c . || true)
           if [ -z "$neoforge" ] || [ -z "$version" ] || [ "$count" -eq 0 ]; then
             echo "::error title=Empty release input::Resolved neoforge='$neoforge' version='$version' game versions=$count. Check versions.json and gradle.properties."
@@ -70,33 +64,25 @@ jobs:
           fi
 
           echo "NeoForge:             $neoforge"
-          echo "Forge:                ${forge:-none}"
           echo "Fabric:               ${fabric_api:-none} (MC ${fabric_mc:-–}, loader ${fabric_loader:-–})"
           echo "Version:              $version"
           echo "Game versions:        $count"
           printf '  %s\n' $game_versions
-          echo "Forge game versions:  $forge_count"
-          printf '  %s\n' $forge_game_versions
           echo "Fabric game versions: $fabric_count"
           printf '  %s\n' $fabric_game_versions
 
           {
             echo "neoforge=$neoforge"
-            echo "forge=$forge"
             echo "fabric_mc=$fabric_mc"
             echo "fabric_api=$fabric_api"
             echo "fabric_loader=$fabric_loader"
             echo "version=$version"
             echo "game_version_count=$count"
-            echo "forge_game_version_count=$forge_count"
             echo "fabric_game_version_count=$fabric_count"
             # Multi-line values need the delimiter form.
             echo "game_versions<<GAME_VERSIONS_EOF"
             printf '%s\n' "$game_versions"
             echo "GAME_VERSIONS_EOF"
-            echo "forge_game_versions<<FORGE_GAME_VERSIONS_EOF"
-            printf '%s\n' "$forge_game_versions"
-            echo "FORGE_GAME_VERSIONS_EOF"
             echo "fabric_game_versions<<FABRIC_GAME_VERSIONS_EOF"
             printf '%s\n' "$fabric_game_versions"
             echo "FABRIC_GAME_VERSIONS_EOF"
@@ -124,7 +110,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          # 21 for the NeoForge universal jar, 25 for the Forge (26.x-only) jar.
+          # 21 for the NeoForge universal jar, 25 for the Fabric (26.x-only) jar.
           java-version: |
             21
             25
@@ -133,10 +119,6 @@ jobs:
 
       - name: Build universal jar (NeoForge)
         run: ./gradlew build --no-daemon -Pneo_version=${{ steps.meta.outputs.neoforge }}
-
-      - name: Build universal jar (Forge)
-        if: steps.meta.outputs.forge != ''
-        run: ./gradlew -p forge build --no-daemon -Pforge_version=${{ steps.meta.outputs.forge }}
 
       - name: Build universal jar (Fabric)
         if: steps.meta.outputs.fabric_api != ''
@@ -157,25 +139,14 @@ jobs:
             | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 65) { print "::error::Expected 65 (Java 21), got " v; exit 1 }}'
           unzip -p "$jar" META-INF/neoforge.mods.toml
 
-      - name: Sanity-check the Forge jar
-        if: steps.meta.outputs.forge != ''
-        run: |
-          jar=$(ls forge/build/libs/*.jar)
-          echo "Publishing $jar"
-          # The Forge jar only spans 26.x, where every version runs Java 25
-          # (class-file major version 69) -- unlike the NeoForge jar it never has
-          # to load on a Java 21 JVM.
-          unzip -p "$jar" drHirsch/disable_front_camera/Disable_front_camera.class \
-            | od -An -tu1 -j6 -N2 \
-            | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 69) { print "::error::Expected 69 (Java 25), got " v; exit 1 }}'
-          unzip -p "$jar" META-INF/mods.toml
-
       - name: Sanity-check the Fabric jar
         if: steps.meta.outputs.fabric_api != ''
         run: |
           jar=$(ls fabric/build/libs/*.jar)
           echo "Publishing $jar"
-          # Like the Forge jar: 26.x only, so Java 25 (major version 69) is fine.
+          # The Fabric jar only spans 26.x, where every version runs Java 25
+          # (class-file major version 69) -- unlike the NeoForge jar it never has
+          # to load on a Java 21 JVM.
           unzip -p "$jar" drHirsch/disable_front_camera/Disable_front_camera.class \
             | od -An -tu1 -j6 -N2 \
             | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 69) { print "::error::Expected 69 (Java 25), got " v; exit 1 }}'
@@ -183,9 +154,9 @@ jobs:
           unzip -p "$jar" fabric.mod.json | jq -e '.id == "disable_front_camera"'
 
       # One mc-publish invocation per destination: each Modrinth version carries
-      # exactly one loader's jar, and the GitHub release carries both. mc-publish
-      # only publishes to platforms whose token is set, which is what separates
-      # the three steps.
+      # exactly one loader's jar, and the GitHub release carries both jars.
+      # mc-publish only publishes to platforms whose token is set, which is what
+      # separates the steps.
       - name: Publish to Modrinth (NeoForge)
         uses: Kira-NT/mc-publish@v3.3.1
         with:
@@ -207,23 +178,6 @@ jobs:
           name: v${{ steps.meta.outputs.version }}
           version-type: release
 
-      - name: Publish to Modrinth (Forge)
-        if: steps.meta.outputs.forge != ''
-        uses: Kira-NT/mc-publish@v3.3.1
-        with:
-          modrinth-id: ${{ vars.MODRINTH_ID || 'WklfOz03' }}
-          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-          files: forge/build/libs/*.jar
-          loaders: forge
-          game-versions: ${{ steps.meta.outputs.forge_game_versions }}
-          game-version-filter: none
-          # The +forge suffix keeps the NeoForge version number plain (continuity
-          # with every release so far) while giving the Forge version a distinct,
-          # queryable number.
-          version: ${{ steps.meta.outputs.version }}+forge
-          name: v${{ steps.meta.outputs.version }} (Forge)
-          version-type: release
-
       - name: Publish to Modrinth (Fabric)
         if: steps.meta.outputs.fabric_api != ''
         uses: Kira-NT/mc-publish@v3.3.1
@@ -234,6 +188,9 @@ jobs:
           loaders: fabric
           game-versions: ${{ steps.meta.outputs.fabric_game_versions }}
           game-version-filter: none
+          # The +fabric suffix keeps the NeoForge version number plain (continuity
+          # with every release so far) while giving the Fabric version a distinct,
+          # queryable number.
           version: ${{ steps.meta.outputs.version }}+fabric
           name: v${{ steps.meta.outputs.version }} (Fabric)
           version-type: release
@@ -244,7 +201,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             build/libs/*.jar
-            forge/build/libs/*.jar
             fabric/build/libs/*.jar
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
@@ -257,8 +213,6 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
           EXPECTED_COUNT: ${{ steps.meta.outputs.game_version_count }}
-          FORGE: ${{ steps.meta.outputs.forge }}
-          EXPECTED_FORGE_COUNT: ${{ steps.meta.outputs.forge_game_version_count }}
           FABRIC: ${{ steps.meta.outputs.fabric_api }}
           EXPECTED_FABRIC_COUNT: ${{ steps.meta.outputs.fabric_game_version_count }}
         run: |
@@ -286,9 +240,6 @@ jobs:
           }
 
           check "$EXPECTED_VERSION" neoforge "$EXPECTED_COUNT"
-          if [ -n "$FORGE" ]; then
-            check "${EXPECTED_VERSION}+forge" forge "$EXPECTED_FORGE_COUNT"
-          fi
           if [ -n "$FABRIC" ]; then
             check "${EXPECTED_VERSION}+fabric" fabric "$EXPECTED_FABRIC_COUNT"
           fi

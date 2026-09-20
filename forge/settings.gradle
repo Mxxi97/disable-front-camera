@@ -1,9 +1,0 @@
-// A standalone Gradle build, NOT a subproject of the root: ModDevGradle (NeoForge)
-// and ForgeGradle both rewire the Minecraft dependency and cannot share a build.
-// Invoke from the repo root with the shared wrapper:
-//   ./gradlew -p forge build -Pforge_version=26.2-65.1.3
-plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
-}
-
-rootProject.name = 'disable-front-camera-forge'

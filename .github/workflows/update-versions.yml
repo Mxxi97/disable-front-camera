@@ -33,14 +33,13 @@ jobs:
       - id: matrix
         if: steps.check.outputs.stale == 'true'
         # Same per-loader expansion as build.yml: every added target is tried on
-        # NeoForge, and on Forge/Fabric too when those loaders have a build for
-        # it. The Fabric loader version comes from the script's output, NOT from
+        # NeoForge, and on Fabric too when Fabric API has a build for it. The
+        # Fabric loader version comes from the script's output, NOT from
         # versions.json -- this checkout still has the old file.
         run: |
           echo '${{ steps.check.outputs.added }}' \
             | jq -c --arg fl "${{ steps.check.outputs.fabric_loader }}" '{include: [ .[]
               | {minecraft, loader: "neoforge", version: .neoforge},
-                (select(.forge != null) | {minecraft, loader: "forge", version: .forge}),
                 (select(.fabric != null) | {minecraft, loader: "fabric", version: .fabric, fabric_loader: $fl}) ]}' \
             > matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
@@ -74,9 +73,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          if [ "${{ matrix.loader }}" = "forge" ]; then
-            ./gradlew -p forge build --no-daemon -Pforge_version=${{ matrix.version }} 2>&1 | tee build.log
-          elif [ "${{ matrix.loader }}" = "fabric" ]; then
+          if [ "${{ matrix.loader }}" = "fabric" ]; then
             ./gradlew -p fabric build --no-daemon \
               -Pminecraft_version=${{ matrix.minecraft }} \
               -Pfabric_api_version=${{ matrix.version }} \
@@ -106,21 +103,7 @@ jobs:
             echo
             echo "### How to fix"
             echo
-            if [ "${{ matrix.loader }}" = "forge" ]; then
-              echo "The Forge build is a single universal source tree (no per-version overlay),"
-              echo "so fix it directly in:"
-              echo
-              echo '```'
-              echo "forge/src/main/java/drHirsch/disable_front_camera/"
-              echo '```'
-              echo
-              echo "Then verify with:"
-              echo
-              echo '```'
-              echo "./gradlew -p forge build -Pforge_version=${{ matrix.version }}"
-              echo "node .github/scripts/discover-versions.mjs"
-              echo '```'
-            elif [ "${{ matrix.loader }}" = "fabric" ]; then
+            if [ "${{ matrix.loader }}" = "fabric" ]; then
               echo "The Fabric build is a single universal source tree (no per-version overlay),"
               echo "so fix it directly in:"
               echo

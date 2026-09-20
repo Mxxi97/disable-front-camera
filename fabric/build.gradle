@@ -26,8 +26,8 @@ base {
     archivesName = "${modId}-fabric"
 }
 
-// Every supported Fabric target (Minecraft 26.1+) runs on Java 25, so like the
-// Forge build there is nothing to derive: 26.x is the whole range.
+// Every supported Fabric target (Minecraft 26.1+) runs on Java 25, so unlike
+// the NeoForge build there is nothing to derive: 26.x is the whole range.
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
 // Minecraft 26.x ships unobfuscated, so there is no mappings/remapping step:

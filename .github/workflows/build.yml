@@ -33,15 +33,14 @@ jobs:
             jq '.targets' versions.json > targets.json
           fi
           # One matrix entry per (target, loader): every target builds on NeoForge,
-          # and targets with a non-null forge/fabric field build on those loaders
-          # too. `version` is the loader's own version axis (NeoForge/Forge
-          # version, or the Fabric API version to compile against). Fabric also
-          # needs the loader version, which is global, so it is stamped onto each
-          # fabric entry here rather than re-read from disk in the build job.
+          # and targets with a non-null fabric field build on Fabric too.
+          # `version` is the loader's own version axis (NeoForge version, or the
+          # Fabric API version to compile against). Fabric also needs the loader
+          # version, which is global, so it is stamped onto each fabric entry
+          # here rather than re-read from disk in the build job.
           fabric_loader=$(jq -r '.fabric_loader // ""' versions.json)
           jq -c --arg fl "$fabric_loader" '{include: [ .[]
             | {minecraft, loader: "neoforge", version: .neoforge},
-              (select(.forge != null) | {minecraft, loader: "forge", version: .forge}),
               (select(.fabric != null) | {minecraft, loader: "fabric", version: .fabric, fabric_loader: $fl}) ]}' \
             targets.json > matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
@@ -71,16 +70,13 @@ jobs:
 
       # Parchment is deliberately not passed: it only affects decompiled Minecraft
       # sources during development and has no effect on the jar.
-      # The Forge and Fabric builds are standalone Gradle builds under forge/ and
-      # fabric/ (ModDevGradle, ForgeGradle and Loom cannot share one build),
-      # driven through the same root wrapper.
+      # The Fabric build is a standalone Gradle build under fabric/ (ModDevGradle
+      # and Loom cannot share one build), driven through the same root wrapper.
       - name: Build
         id: build
         continue-on-error: true
         run: |
-          if [ "${{ matrix.loader }}" = "forge" ]; then
-            ./gradlew -p forge build --no-daemon -Pforge_version=${{ matrix.version }}
-          elif [ "${{ matrix.loader }}" = "fabric" ]; then
+          if [ "${{ matrix.loader }}" = "fabric" ]; then
             ./gradlew -p fabric build --no-daemon \
               -Pminecraft_version=${{ matrix.minecraft }} \
               -Pfabric_api_version=${{ matrix.version }} \
@@ -95,7 +91,6 @@ jobs:
           name: disable_front_camera-${{ matrix.loader }}-mc${{ matrix.minecraft }}
           path: |
             build/libs/*.jar
-            forge/build/libs/*.jar
             fabric/build/libs/*.jar
           if-no-files-found: error
 
