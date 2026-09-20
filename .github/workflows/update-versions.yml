@@ -109,6 +109,16 @@ jobs:
           gh issue create --title "$TITLE" --body-file issue.md --label "version-port" || \
             gh issue create --title "$TITLE" --body-file issue.md
 
+      # Without this the job would conclude "success" even when the build failed:
+      # continue-on-error leaves the step's *outcome* as failure but its *conclusion*
+      # as success, and creating the issue exits 0. The update job below gates on
+      # this job's result, so the gate would never actually close.
+      # fail-fast is off, so every new target is still attempted and still files its
+      # own issue before this runs.
+      - name: Fail the job if this version does not compile
+        if: steps.build.outcome != 'success'
+        run: exit 1
+
   # Only if every new target built. If one failed, its issue is the signal, and the
   # next scheduled run will pick things up once it has been ported.
   update:
