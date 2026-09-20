@@ -216,33 +216,49 @@ jobs:
           FABRIC: ${{ steps.meta.outputs.fabric_api }}
           EXPECTED_FABRIC_COUNT: ${{ steps.meta.outputs.fabric_game_version_count }}
         run: |
-          published=$(curl -sS "https://api.modrinth.com/v2/project/WklfOz03/version")
-          echo "$published" | jq -r '.[] | "\(.version_number)  loaders=\(.loaders|join(","))  versions=\(.game_versions|length)"'
-
           check () {
             v=$1; loader=$2; expected=$3
             actual=$(echo "$published" | jq --arg v "$v" '[.[] | select(.version_number == $v)] | first')
             if [ "$actual" = "null" ] || [ -z "$actual" ]; then
-              echo "::error title=Not published::Modrinth has no version $v despite the publish step succeeding."
-              exit 1
+              echo "Modrinth does not list version $v."
+              return 1
             fi
             if [ "$(echo "$actual" | jq --arg l "$loader" '.loaders | index($l)')" = "null" ]; then
-              echo "::error title=Wrong loader::Version $v is not tagged with loader '$loader'."
-              exit 1
+              echo "Version $v is not tagged with loader '$loader'."
+              return 1
             fi
             count=$(echo "$actual" | jq '.game_versions | length')
             if [ "$count" != "$expected" ]; then
-              echo "::error title=Wrong game versions::Published $v with $count game versions, expected $expected."
-              echo "$actual" | jq -r '.game_versions | join(", ")'
-              exit 1
+              echo "Version $v has $count game versions, expected $expected: $(echo "$actual" | jq -r '.game_versions | join(", ")')"
+              return 1
             fi
             echo "Published $v ($loader) to Modrinth for $count Minecraft versions."
           }
 
-          check "$EXPECTED_VERSION" neoforge "$EXPECTED_COUNT"
-          if [ -n "$FABRIC" ]; then
-            check "${EXPECTED_VERSION}+fabric" fabric "$EXPECTED_FABRIC_COUNT"
-          fi
+          verify () {
+            published=$(curl -sS "https://api.modrinth.com/v2/project/WklfOz03/version")
+            check "$EXPECTED_VERSION" neoforge "$EXPECTED_COUNT" || return 1
+            if [ -n "$FABRIC" ]; then
+              check "${EXPECTED_VERSION}+fabric" fabric "$EXPECTED_FABRIC_COUNT" || return 1
+            fi
+          }
+
+          # The version listing lags a little behind uploads (the v1.2.0 release
+          # was fully published yet failed this step on the first query), so give
+          # Modrinth up to two minutes to become consistent before failing.
+          for attempt in 1 2 3 4 5 6; do
+            if verify; then
+              exit 0
+            fi
+            if [ "$attempt" != "6" ]; then
+              echo "Attempt $attempt: not fully visible yet, retrying in 20s..."
+              sleep 20
+            fi
+          done
+
+          echo "::error title=Release not verified::Modrinth still does not show the expected versions. Current listing:"
+          echo "$published" | jq -r '.[] | "\(.version_number)  loaders=\(.loaders|join(","))  versions=\(.game_versions|length)"'
+          exit 1
 
   # Releases are usually started by the daily automation with GITHUB_TOKEN, and
   # nobody gets a failure email for those runs. An issue is the only signal the
