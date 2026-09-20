@@ -32,11 +32,18 @@ jobs:
           else
             jq '.targets' versions.json > targets.json
           fi
-          echo "matrix=$(jq -c '{include: .}' targets.json)" >> "$GITHUB_OUTPUT"
-          jq -r '.[] | "  \(.minecraft) <- NeoForge \(.neoforge)"' targets.json
+          # One matrix entry per (target, loader): every target builds on NeoForge,
+          # and targets with a non-null forge field build on Forge too. `version`
+          # is the loader's own version string (-Pneo_version / -Pforge_version).
+          jq -c '{include: [ .[]
+            | {minecraft, loader: "neoforge", version: .neoforge},
+              (select(.forge != null) | {minecraft, loader: "forge", version: .forge}) ]}' \
+            targets.json > matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+          jq -r '.include[] | "  \(.minecraft) <- \(.loader) \(.version)"' matrix.json
 
   build:
-    name: MC ${{ matrix.minecraft }}
+    name: MC ${{ matrix.minecraft }} (${{ matrix.loader }})
     needs: targets
     runs-on: ubuntu-latest
     strategy:
@@ -59,26 +66,35 @@ jobs:
 
       # Parchment is deliberately not passed: it only affects decompiled Minecraft
       # sources during development and has no effect on the jar.
+      # The Forge build is a standalone Gradle build under forge/ (ModDevGradle and
+      # ForgeGradle cannot share one build), driven through the same root wrapper.
       - name: Build
         id: build
         continue-on-error: true
-        run: ./gradlew build --no-daemon -Pneo_version=${{ matrix.neoforge }}
+        run: |
+          if [ "${{ matrix.loader }}" = "forge" ]; then
+            ./gradlew -p forge build --no-daemon -Pforge_version=${{ matrix.version }}
+          else
+            ./gradlew build --no-daemon -Pneo_version=${{ matrix.version }}
+          fi
 
       - uses: actions/upload-artifact@v4
         if: steps.build.outcome == 'success'
         with:
-          name: disable_front_camera-mc${{ matrix.minecraft }}
-          path: build/libs/*.jar
+          name: disable_front_camera-${{ matrix.loader }}-mc${{ matrix.minecraft }}
+          path: |
+            build/libs/*.jar
+            forge/build/libs/*.jar
           if-no-files-found: error
 
       - name: Report
         run: |
           if [ "${{ steps.build.outcome }}" != "success" ]; then
-            echo "::error title=Build failed::Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})"
-            echo "- FAILED Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Build failed::Minecraft ${{ matrix.minecraft }} (${{ matrix.loader }} ${{ matrix.version }})"
+            echo "- FAILED Minecraft ${{ matrix.minecraft }} (${{ matrix.loader }} ${{ matrix.version }})" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "- ok Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ok Minecraft ${{ matrix.minecraft }} (${{ matrix.loader }} ${{ matrix.version }})" >> "$GITHUB_STEP_SUMMARY"
 
   result:
     name: All targets

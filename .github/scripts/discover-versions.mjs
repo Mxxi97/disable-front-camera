@@ -26,10 +26,19 @@ const PARCHMENT_METADATA = (mc) =>
   `https://maven.parchmentmc.org/org/parchmentmc/data/parchment-${mc}/maven-metadata.xml`
 const MODDEV_METADATA =
   'https://plugins.gradle.org/m2/net/neoforged/moddev/net.neoforged.moddev.gradle.plugin/maven-metadata.xml'
+const FORGE_PROMOTIONS =
+  'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json'
 
 // Minecraft 1.21.1 was the mod's original target; never regress below it.
 // (There is deliberately no 21.2 series -- NeoForge skipped Minecraft 1.21.2.)
 const FLOOR_SERIES = [21, 1]
+
+// Forge support deliberately starts at the calendar versions (26.x): the 1.21.x
+// line would need the pre-rewrite Forge APIs and a Java 21 toolchain, and
+// NeoForge already covers those players. Targets below this floor, or whose
+// Minecraft version Forge has not shipped yet, carry forge: null -- a NeoForge
+// release must never wait on Forge lagging behind.
+const FORGE_FLOOR_MAJOR = 26
 
 const VERSIONS_JSON = fileURLToPath(new URL('../../versions.json', import.meta.url))
 const README = fileURLToPath(new URL('../../README.md', import.meta.url))
@@ -124,6 +133,19 @@ async function parchmentFor (minecraftVersion) {
   return latestFromMavenMetadata(await get(PARCHMENT_METADATA(minecraftVersion), { optional: true }))
 }
 
+/**
+ * Latest Forge build per Minecraft version, from Forge's promotions file. Keys
+ * there are "<minecraft>-latest" / "<minecraft>-recommended" with just the build
+ * number as the value; "latest" is used to mirror how the NeoForge side always
+ * tracks the newest build of each series. Returns the full maven artifact
+ * version ("26.2-65.1.3"), which is what -Pforge_version expects.
+ */
+function forgeVersionFor (minecraft, promos) {
+  if (Number(minecraft.split('.')[0]) < FORGE_FLOOR_MAJOR) return null
+  const build = promos[`${minecraft}-latest`]
+  return build ? `${minecraft}-${build}` : null
+}
+
 async function discover () {
   const listing = JSON.parse(await get(NEOFORGE_VERSIONS))
   const versions = (listing.versions ?? [])
@@ -140,12 +162,15 @@ async function discover () {
     .sort(([a], [b]) => compareSeries(a, b))
     .map(([, candidates]) => pickBest(candidates))
 
+  const promos = JSON.parse(await get(FORGE_PROMOTIONS)).promos ?? {}
+
   const targets = []
   for (const candidate of chosen) {
     const minecraft = await minecraftVersionFor(candidate.version)
     targets.push({
       minecraft,
       neoforge: candidate.version,
+      forge: forgeVersionFor(minecraft, promos),
       beta: candidate.beta,
       parchment: await parchmentFor(minecraft)
     })
@@ -161,12 +186,12 @@ function renderReadmeTable (data) {
   const rows = data.targets
     .slice()
     .reverse()
-    .map((t) => `| ${t.minecraft} | ${t.neoforge}${t.beta ? ' (beta)' : ''} |`)
+    .map((t) => `| ${t.minecraft} | ${t.neoforge}${t.beta ? ' (beta)' : ''} | ${t.forge ?? '—'} |`)
   return [
     README_START,
     '',
-    '| Minecraft | NeoForge |',
-    '| --- | --- |',
+    '| Minecraft | NeoForge | Forge |',
+    '| --- | --- | --- |',
     ...rows,
     '',
     README_END
@@ -204,8 +229,12 @@ if (check) {
     await emitGithubOutput({ stale: false, added: '[]' })
     process.exit(0)
   }
-  const known = new Set(JSON.parse(currentJson || '{"targets":[]}').targets.map((t) => t.neoforge))
-  const added = data.targets.filter((t) => !known.has(t.neoforge))
+  // Keyed on the (neoforge, forge) pair: a Forge-only version bump must land in
+  // `added` too, or try-build would be skipped while the file is stale and the
+  // update job's needs.try-build.result == 'success' gate would never open.
+  const key = (t) => `${t.neoforge}|${t.forge ?? ''}`
+  const known = new Set(JSON.parse(currentJson || '{"targets":[]}').targets.map(key))
+  const added = data.targets.filter((t) => !known.has(key(t)))
   console.log('versions.json is out of date.')
   for (const target of added) {
     console.log(`  new target: Minecraft ${target.minecraft} / NeoForge ${target.neoforge}`)
@@ -221,5 +250,5 @@ await writeFile(VERSIONS_JSON, serialised)
 await writeFile(README, readme)
 console.log(`Wrote versions.json with ${data.targets.length} targets.`)
 for (const target of data.targets) {
-  console.log(`  ${target.minecraft.padEnd(9)} <- NeoForge ${target.neoforge}`)
+  console.log(`  ${target.minecraft.padEnd(9)} <- NeoForge ${target.neoforge}${target.forge ? ` / Forge ${target.forge}` : ''}`)
 }

@@ -32,7 +32,14 @@ jobs:
 
       - id: matrix
         if: steps.check.outputs.stale == 'true'
-        run: echo "matrix={\"include\":${{ steps.check.outputs.added }}}" >> "$GITHUB_OUTPUT"
+        # Same per-loader expansion as build.yml: every added target is tried on
+        # NeoForge, and on Forge too when Forge has a build for it.
+        run: |
+          echo '${{ steps.check.outputs.added }}' | jq -c '{include: [ .[]
+            | {minecraft, loader: "neoforge", version: .neoforge},
+              (select(.forge != null) | {minecraft, loader: "forge", version: .forge}) ]}' \
+            > matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
 
       - name: Nothing to do
         if: steps.check.outputs.stale != 'true'
@@ -41,7 +48,7 @@ jobs:
   # New versions are built before anything is committed, so versions.json never
   # gains a target that does not compile.
   try-build:
-    name: Try MC ${{ matrix.minecraft }}
+    name: Try MC ${{ matrix.minecraft }} (${{ matrix.loader }})
     needs: discover
     if: needs.discover.outputs.stale == 'true' && needs.discover.outputs.added != '[]'
     runs-on: ubuntu-latest
@@ -63,13 +70,17 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          ./gradlew build --no-daemon -Pneo_version=${{ matrix.neoforge }} 2>&1 | tee build.log
+          if [ "${{ matrix.loader }}" = "forge" ]; then
+            ./gradlew -p forge build --no-daemon -Pforge_version=${{ matrix.version }} 2>&1 | tee build.log
+          else
+            ./gradlew build --no-daemon -Pneo_version=${{ matrix.version }} 2>&1 | tee build.log
+          fi
 
       - name: Open an issue if it no longer compiles
         if: steps.build.outcome != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TITLE: "Port to Minecraft ${{ matrix.minecraft }} (NeoForge ${{ matrix.neoforge }})"
+          TITLE: "Port to Minecraft ${{ matrix.minecraft }} (${{ matrix.loader }} ${{ matrix.version }})"
         run: |
           # Don't file the same issue every week.
           existing=$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')
@@ -79,26 +90,42 @@ jobs:
           fi
 
           {
-            echo "Minecraft **${{ matrix.minecraft }}** is out and NeoForge **${{ matrix.neoforge }}** is available,"
+            echo "Minecraft **${{ matrix.minecraft }}** is out and ${{ matrix.loader }} **${{ matrix.version }}** is available,"
             echo "but the mod no longer compiles against it, so it was not added to \`versions.json\`."
             echo
-            echo "Every other supported version is unaffected and still builds."
+            echo "Every other supported version and loader is unaffected and still builds."
             echo
             echo "### How to fix"
             echo
-            echo "Put a replacement for whichever source file broke in:"
-            echo
-            echo '```'
-            echo "src/versions/${{ matrix.minecraft }}/java/drHirsch/disable_front_camera/"
-            echo '```'
-            echo
-            echo "A file there replaces the same-named file under \`src/main/java\` for this"
-            echo "version only. Then run:"
-            echo
-            echo '```'
-            echo "node .github/scripts/build-all.mjs --only ${{ matrix.neoforge }}"
-            echo "node .github/scripts/discover-versions.mjs"
-            echo '```'
+            if [ "${{ matrix.loader }}" = "forge" ]; then
+              echo "The Forge build is a single universal source tree (no per-version overlay),"
+              echo "so fix it directly in:"
+              echo
+              echo '```'
+              echo "forge/src/main/java/drHirsch/disable_front_camera/"
+              echo '```'
+              echo
+              echo "Then verify with:"
+              echo
+              echo '```'
+              echo "./gradlew -p forge build -Pforge_version=${{ matrix.version }}"
+              echo "node .github/scripts/discover-versions.mjs"
+              echo '```'
+            else
+              echo "Put a replacement for whichever source file broke in:"
+              echo
+              echo '```'
+              echo "src/versions/${{ matrix.minecraft }}/java/drHirsch/disable_front_camera/"
+              echo '```'
+              echo
+              echo "A file there replaces the same-named file under \`src/main/java\` for this"
+              echo "version only. Then run:"
+              echo
+              echo '```'
+              echo "node .github/scripts/build-all.mjs --only ${{ matrix.version }}"
+              echo "node .github/scripts/discover-versions.mjs"
+              echo '```'
+            fi
             echo
             echo "### Compile errors"
             echo

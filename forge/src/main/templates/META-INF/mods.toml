@@ -1,0 +1,38 @@
+# Mod metadata for the FORGE jar. The placeholders below are expanded by the
+# generateModMetadata task in forge/build.gradle. This is the Forge dialect:
+# dependencies use mandatory=true where NeoForge uses type="required", and the
+# file is named mods.toml, not neoforge.mods.toml.
+#
+# Like the NeoForge jar, this is a single universal jar -- one build covers every
+# supported 26.x version, so the ranges are deliberately wide rather than pinned
+# to whichever Forge build produced the jar. Releases compile against the OLDEST
+# supported Forge so nothing newer than the whole range offers can be referenced.
+
+modLoader = "javafml"
+loaderVersion = "${forge_loader_version_range}"
+license = "${mod_license}"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''${mod_description}'''
+# Client-only mod: keep dedicated servers from loading it, and keep it from
+# blocking connections to vanilla or mod-less servers.
+clientSideOnly = true
+displayTest = "IGNORE_ALL_VERSION"
+
+[[dependencies."${mod_id}"]]
+modId = "forge"
+mandatory = true
+versionRange = "${forge_version_range}"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies."${mod_id}"]]
+modId = "minecraft"
+mandatory = true
+versionRange = "${forge_minecraft_version_range}"
+ordering = "NONE"
+side = "CLIENT"

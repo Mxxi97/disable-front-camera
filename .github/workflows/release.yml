@@ -46,25 +46,42 @@ jobs:
           # looked perfectly populated in the run log.
           game_versions=$(jq -r '.targets[].minecraft' versions.json)
 
+          # The Forge jar has its own, narrower axis: oldest supported Forge (same
+          # oldest-first reasoning) and only the game versions Forge covers. Both
+          # may be empty if Forge ever drops out of versions.json entirely -- the
+          # Forge steps below are skipped in that case rather than failing the
+          # NeoForge release.
+          forge=$(jq -r '[.targets[] | select(.forge != null)][0].forge // empty' versions.json)
+          forge_game_versions=$(jq -r '.targets[] | select(.forge != null) | .minecraft' versions.json)
+
           count=$(printf '%s\n' "$game_versions" | grep -c .)
+          forge_count=$(printf '%s\n' "$forge_game_versions" | grep -c . || true)
           if [ -z "$neoforge" ] || [ -z "$version" ] || [ "$count" -eq 0 ]; then
             echo "::error title=Empty release input::Resolved neoforge='$neoforge' version='$version' game versions=$count. Check versions.json and gradle.properties."
             exit 1
           fi
 
-          echo "NeoForge:      $neoforge"
-          echo "Version:       $version"
-          echo "Game versions: $count"
+          echo "NeoForge:            $neoforge"
+          echo "Forge:               ${forge:-none}"
+          echo "Version:             $version"
+          echo "Game versions:       $count"
           printf '  %s\n' $game_versions
+          echo "Forge game versions: $forge_count"
+          printf '  %s\n' $forge_game_versions
 
           {
             echo "neoforge=$neoforge"
+            echo "forge=$forge"
             echo "version=$version"
             echo "game_version_count=$count"
+            echo "forge_game_version_count=$forge_count"
             # Multi-line values need the delimiter form.
             echo "game_versions<<GAME_VERSIONS_EOF"
             printf '%s\n' "$game_versions"
             echo "GAME_VERSIONS_EOF"
+            echo "forge_game_versions<<FORGE_GAME_VERSIONS_EOF"
+            printf '%s\n' "$forge_game_versions"
+            echo "FORGE_GAME_VERSIONS_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check publishing credentials
@@ -89,14 +106,21 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          # 21 for the NeoForge universal jar, 25 for the Forge (26.x-only) jar.
+          java-version: |
+            21
+            25
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build universal jar
+      - name: Build universal jar (NeoForge)
         run: ./gradlew build --no-daemon -Pneo_version=${{ steps.meta.outputs.neoforge }}
 
-      - name: Sanity-check the jar
+      - name: Build universal jar (Forge)
+        if: steps.meta.outputs.forge != ''
+        run: ./gradlew -p forge build --no-daemon -Pforge_version=${{ steps.meta.outputs.forge }}
+
+      - name: Sanity-check the NeoForge jar
         run: |
           jar=$(ls build/libs/*.jar)
           echo "Publishing $jar"
@@ -107,7 +131,25 @@ jobs:
             | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 65) { print "::error::Expected 65 (Java 21), got " v; exit 1 }}'
           unzip -p "$jar" META-INF/neoforge.mods.toml
 
-      - uses: Kira-NT/mc-publish@v3.3.1
+      - name: Sanity-check the Forge jar
+        if: steps.meta.outputs.forge != ''
+        run: |
+          jar=$(ls forge/build/libs/*.jar)
+          echo "Publishing $jar"
+          # The Forge jar only spans 26.x, where every version runs Java 25
+          # (class-file major version 69) -- unlike the NeoForge jar it never has
+          # to load on a Java 21 JVM.
+          unzip -p "$jar" drHirsch/disable_front_camera/Disable_front_camera.class \
+            | od -An -tu1 -j6 -N2 \
+            | awk '{v=$1*256+$2; print "class file major version: " v; if (v != 69) { print "::error::Expected 69 (Java 25), got " v; exit 1 }}'
+          unzip -p "$jar" META-INF/mods.toml
+
+      # One mc-publish invocation per destination: each Modrinth version carries
+      # exactly one loader's jar, and the GitHub release carries both. mc-publish
+      # only publishes to platforms whose token is set, which is what separates
+      # the three steps.
+      - name: Publish to Modrinth (NeoForge)
+        uses: Kira-NT/mc-publish@v3.3.1
         with:
           # The immutable Modrinth project id, not the slug, so renaming the project
           # cannot break releases. It is public (the API serves it to anyone) and is
@@ -117,13 +159,40 @@ jobs:
           # vars.MODRINTH_ID still overrides this if it is ever set.
           modrinth-id: ${{ vars.MODRINTH_ID || 'WklfOz03' }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           files: build/libs/*.jar
           loaders: neoforge
           # Every version the matrix just verified, listed explicitly rather than
           # inferred from the jar's version range.
           game-versions: ${{ steps.meta.outputs.game_versions }}
           game-version-filter: none
+          version: ${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
+          version-type: release
+
+      - name: Publish to Modrinth (Forge)
+        if: steps.meta.outputs.forge != ''
+        uses: Kira-NT/mc-publish@v3.3.1
+        with:
+          modrinth-id: ${{ vars.MODRINTH_ID || 'WklfOz03' }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: forge/build/libs/*.jar
+          loaders: forge
+          game-versions: ${{ steps.meta.outputs.forge_game_versions }}
+          game-version-filter: none
+          # The +forge suffix keeps the NeoForge version number plain (continuity
+          # with every release so far) while giving the Forge version a distinct,
+          # queryable number.
+          version: ${{ steps.meta.outputs.version }}+forge
+          name: v${{ steps.meta.outputs.version }} (Forge)
+          version-type: release
+
+      - name: Publish the GitHub release
+        uses: Kira-NT/mc-publish@v3.3.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            build/libs/*.jar
+            forge/build/libs/*.jar
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
           version-type: release
@@ -135,24 +204,36 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
           EXPECTED_COUNT: ${{ steps.meta.outputs.game_version_count }}
+          FORGE: ${{ steps.meta.outputs.forge }}
+          EXPECTED_FORGE_COUNT: ${{ steps.meta.outputs.forge_game_version_count }}
         run: |
           published=$(curl -sS "https://api.modrinth.com/v2/project/WklfOz03/version")
           echo "$published" | jq -r '.[] | "\(.version_number)  loaders=\(.loaders|join(","))  versions=\(.game_versions|length)"'
 
-          actual=$(echo "$published" | jq --arg v "$EXPECTED_VERSION" '[.[] | select(.version_number == $v)] | first')
-          if [ "$actual" = "null" ] || [ -z "$actual" ]; then
-            echo "::error title=Not published::Modrinth has no version $EXPECTED_VERSION despite the publish step succeeding."
-            exit 1
-          fi
+          check () {
+            v=$1; loader=$2; expected=$3
+            actual=$(echo "$published" | jq --arg v "$v" '[.[] | select(.version_number == $v)] | first')
+            if [ "$actual" = "null" ] || [ -z "$actual" ]; then
+              echo "::error title=Not published::Modrinth has no version $v despite the publish step succeeding."
+              exit 1
+            fi
+            if [ "$(echo "$actual" | jq --arg l "$loader" '.loaders | index($l)')" = "null" ]; then
+              echo "::error title=Wrong loader::Version $v is not tagged with loader '$loader'."
+              exit 1
+            fi
+            count=$(echo "$actual" | jq '.game_versions | length')
+            if [ "$count" != "$expected" ]; then
+              echo "::error title=Wrong game versions::Published $v with $count game versions, expected $expected."
+              echo "$actual" | jq -r '.game_versions | join(", ")'
+              exit 1
+            fi
+            echo "Published $v ($loader) to Modrinth for $count Minecraft versions."
+          }
 
-          count=$(echo "$actual" | jq '.game_versions | length')
-          if [ "$count" != "$EXPECTED_COUNT" ]; then
-            echo "::error title=Wrong game versions::Published $EXPECTED_VERSION with $count game versions, expected $EXPECTED_COUNT."
-            echo "$actual" | jq -r '.game_versions | join(", ")'
-            exit 1
+          check "$EXPECTED_VERSION" neoforge "$EXPECTED_COUNT"
+          if [ -n "$FORGE" ]; then
+            check "${EXPECTED_VERSION}+forge" forge "$EXPECTED_FORGE_COUNT"
           fi
-
-          echo "Published $EXPECTED_VERSION to Modrinth for $count Minecraft versions."
 
   # Releases are usually started by the daily automation with GITHUB_TOKEN, and
   # nobody gets a failure email for those runs. An issue is the only signal the
