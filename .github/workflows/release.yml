@@ -29,29 +29,39 @@ jobs:
           # which the Java 25 JVM used by Minecraft 26.x loads happily. The reverse
           # is not true, so this direction matters.
           neoforge=$(jq -r '.targets[0].neoforge' versions.json)
-          # Underscore, not a hyphen: in GitHub expressions "outputs.game-versions"
-          # parses as a subtraction, so the value would silently arrive empty.
-          game_versions=$(jq -r '[.targets[].minecraft] | join(",")' versions.json)
           # From gradle.properties, not the tag name, so that a manual
           # workflow_dispatch run does not try to publish a version called "main".
           version=$(sed -n 's/^mod_version=//p' gradle.properties)
 
-          # mc-publish only complains about these once the jar is already built.
-          for pair in "neoforge=$neoforge" "game_versions=$game_versions" "version=$version"; do
-            if [ "${pair#*=}" = "" ]; then
-              echo "::error title=Empty release input::${pair%%=*} resolved to nothing. Check versions.json and gradle.properties."
-              exit 1
-            fi
-          done
+          # NEWLINE separated, not comma separated. mc-publish declares game-versions
+          # as string[] and splits array inputs on /\r?\n/ by default, so a comma
+          # separated value is never split. The whole string is then handed to the
+          # Minecraft version provider as a version *range*, "1.21.1,1.21.2,..." does
+          # not parse as one, and an unparseable range becomes a range that matches
+          # nothing -- leaving zero game versions and failing inside mc-publish with
+          # "At least one game version should be specified", despite the input having
+          # looked perfectly populated in the run log.
+          game_versions=$(jq -r '.targets[].minecraft' versions.json)
+
+          count=$(printf '%s\n' "$game_versions" | grep -c .)
+          if [ -z "$neoforge" ] || [ -z "$version" ] || [ "$count" -eq 0 ]; then
+            echo "::error title=Empty release input::Resolved neoforge='$neoforge' version='$version' game versions=$count. Check versions.json and gradle.properties."
+            exit 1
+          fi
 
           echo "NeoForge:      $neoforge"
           echo "Version:       $version"
-          echo "Game versions: $game_versions"
+          echo "Game versions: $count"
+          printf '  %s\n' $game_versions
 
           {
             echo "neoforge=$neoforge"
-            echo "game_versions=$game_versions"
             echo "version=$version"
+            echo "game_version_count=$count"
+            # Multi-line values need the delimiter form.
+            echo "game_versions<<GAME_VERSIONS_EOF"
+            printf '%s\n' "$game_versions"
+            echo "GAME_VERSIONS_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check publishing credentials
@@ -114,3 +124,29 @@ jobs:
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
           version-type: release
+
+      # Confirm against the Modrinth API rather than trusting the step above to have
+      # done what it reported. An earlier run silently dropped every game version and
+      # would have published an unusable release had it not errored outright.
+      - name: Verify the release reached Modrinth
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+          EXPECTED_COUNT: ${{ steps.meta.outputs.game_version_count }}
+        run: |
+          published=$(curl -sS "https://api.modrinth.com/v2/project/WklfOz03/version")
+          echo "$published" | jq -r '.[] | "\(.version_number)  loaders=\(.loaders|join(","))  versions=\(.game_versions|length)"'
+
+          actual=$(echo "$published" | jq --arg v "$EXPECTED_VERSION" '[.[] | select(.version_number == $v)] | first')
+          if [ "$actual" = "null" ] || [ -z "$actual" ]; then
+            echo "::error title=Not published::Modrinth has no version $EXPECTED_VERSION despite the publish step succeeding."
+            exit 1
+          fi
+
+          count=$(echo "$actual" | jq '.game_versions | length')
+          if [ "$count" != "$EXPECTED_COUNT" ]; then
+            echo "::error title=Wrong game versions::Published $EXPECTED_VERSION with $count game versions, expected $EXPECTED_COUNT."
+            echo "$actual" | jq -r '.game_versions | join(", ")'
+            exit 1
+          fi
+
+          echo "Published $EXPECTED_VERSION to Modrinth for $count Minecraft versions."
