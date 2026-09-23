@@ -25,6 +25,12 @@ players.
 Every version in this table is compiled in CI on each push, and again as a gate
 before any release, so the compatibility claim is tested rather than assumed.
 
+When a newly discovered NeoForge build is beta-only for an already-supported
+Minecraft version, automation updates this table and syncs Modrinth
+`game_versions` metadata on the existing NeoForge Modrinth version without
+cutting a new mod release. New/stable support additions still follow the normal
+bump/tag/release flow.
+
 <!-- versions:start -->
 
 | Minecraft | NeoForge | Fabric |

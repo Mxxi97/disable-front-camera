@@ -235,24 +235,40 @@ if (check) {
     await emitGithubOutput({ stale: false, added: '[]', fabric_loader: data.fabric_loader })
     process.exit(0)
   }
-  // What lands in `added` decides what gets try-built AND whether a release is
-  // cut, so the key is chosen deliberately: NeoForge version bumps and Fabric
-  // coverage appearing or vanishing (null <-> non-null) are release-worthy.
-  // A routine Fabric API version bump is not -- the jar declares "fabric-api": "*"
-  // and never embeds it, and Fabric API releases often enough that keying on it
-  // would spam pointless releases. Those, like parchment/loader/moddev updates,
-  // flow through the workflow's metadata-only commit path instead.
+  // What lands in `added` decides what gets try-built and then classified:
+  // release-worthy (bump/tag/publish) vs metadata-only (no new mod release).
+  //
+  // The key is chosen deliberately: NeoForge bumps and Fabric coverage changes
+  // (null <-> non-null) are meaningful target changes; routine Fabric API bumps
+  // are not (the jar declares "fabric-api": "*" and does not embed Fabric API).
+  // That keeps high-frequency dependency churn out of release decisions.
   const key = (t) => `${t.neoforge}|${t.fabric != null}`
-  const known = new Set(JSON.parse(currentJson || '{"targets":[]}').targets.map(key))
+  const currentTargets = JSON.parse(currentJson || '{"targets":[]}').targets
+  const known = new Set(currentTargets.map(key))
+  const knownMinecraft = new Set(currentTargets.map((t) => t.minecraft))
   const added = data.targets.filter((t) => !known.has(key(t)))
+  // Beta-only metadata sync is safe only when every added target is:
+  // 1) a beta NeoForge target, and
+  // 2) for a Minecraft version we already support in versions.json.
+  // This avoids suppressing intentional first-support releases for a new
+  // Minecraft line that happens to arrive as a beta NeoForge build.
+  const betaOnly = added.length > 0 &&
+    added.every((t) => t.beta && knownMinecraft.has(t.minecraft))
+  const releaseNeeded = added.length > 0 && !betaOnly
   console.log('versions.json is out of date.')
   for (const target of added) {
     console.log(`  new target: Minecraft ${target.minecraft} / NeoForge ${target.neoforge}`)
   }
-  console.log(JSON.stringify({ added }, null, 2))
+  console.log(JSON.stringify({ added, betaOnly, releaseNeeded }, null, 2))
   // fabric_loader rides along because try-build needs it for fabric targets and
   // cannot read it from versions.json -- the checkout still has the OLD file.
-  await emitGithubOutput({ stale: true, added: JSON.stringify(added), fabric_loader: data.fabric_loader })
+  await emitGithubOutput({
+    stale: true,
+    added: JSON.stringify(added),
+    beta_only: betaOnly,
+    release_needed: releaseNeeded,
+    fabric_loader: data.fabric_loader
+  })
   // The scheduled workflow treats a non-zero exit as "there is work to do", so it
   // only signals staleness when asked to fail.
   process.exit(process.argv.includes('--soft') ? 0 : 1)

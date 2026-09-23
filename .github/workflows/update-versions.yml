@@ -19,6 +19,8 @@ jobs:
     outputs:
       stale: ${{ steps.check.outputs.stale }}
       added: ${{ steps.check.outputs.added }}
+      beta_only: ${{ steps.check.outputs.beta_only || 'false' }}
+      release_needed: ${{ steps.check.outputs.release_needed || 'false' }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -157,9 +159,10 @@ jobs:
   # next scheduled run will pick things up once it has been ported.
   #
   # This is the zero-touch path: no PR, no human. try-build has just proven every
-  # new target compiles, so the update is committed straight to main, the version
-  # is bumped, and the release workflow is dispatched -- the mod appears on
-  # Modrinth with the new game versions without anyone touching the repo.
+  # new target compiles, so the update is committed straight to main, then:
+  # - release-needed additions: bump/tag/dispatch the release workflow
+  # - beta-only additions on already-supported Minecraft versions: metadata sync
+  #   on the existing NeoForge Modrinth version (no new mod release artifact)
   update:
     name: Update versions.json and release
     needs: [discover, try-build]
@@ -186,24 +189,132 @@ jobs:
       - name: Regenerate versions.json and the README table
         run: node .github/scripts/discover-versions.mjs
 
-      # Metadata-only path: nothing was release-worthy, so just keep the file
-      # current. No version bump, no tag, no release.
+      # Metadata-only path: either no new target at all, or only NeoForge beta
+      # bumps for Minecraft versions already supported in versions.json.
       - name: Commit metadata-only update
-        if: needs.discover.outputs.added == '[]'
+        if: needs.discover.outputs.added == '[]' || needs.discover.outputs.beta_only == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add versions.json README.md
-          git commit -m "Update version metadata"
+          git commit -m "${{ needs.discover.outputs.beta_only == 'true' && 'Support new NeoForge beta metadata' || 'Update version metadata' }}"
           git push origin main
 
+      - name: Sync NeoForge game version metadata on Modrinth
+        if: needs.discover.outputs.beta_only == 'true'
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_ID || 'WklfOz03' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$MODRINTH_TOKEN" ]; then
+            echo "::error title=Missing MODRINTH_TOKEN::Add MODRINTH_TOKEN under Settings > Secrets and variables > Actions > Secrets."
+            exit 1
+          fi
+
+          current_version=$(sed -n 's/^mod_version=//p' gradle.properties)
+          if [ -z "$current_version" ]; then
+            echo "::error title=Missing mod_version::Could not read mod_version from gradle.properties."
+            exit 1
+          fi
+
+          # Current repository source of truth for NeoForge support matrix.
+          expected_game_versions=$(jq -c '[.targets[].minecraft]' versions.json)
+          expected_count=$(echo "$expected_game_versions" | jq 'length')
+          if [ "$expected_count" -eq 0 ]; then
+            echo "::error title=Empty versions.json::No Minecraft targets were found to sync to Modrinth."
+            exit 1
+          fi
+
+          echo "Looking up NeoForge Modrinth version '$current_version' for project '$MODRINTH_PROJECT_ID'..."
+          listing_url="https://api.modrinth.com/v2/project/${MODRINTH_PROJECT_ID}/version?loaders=%5B%22neoforge%22%5D"
+          listing=$(curl -fsS -H "Authorization: $MODRINTH_TOKEN" "$listing_url")
+          version_json=$(echo "$listing" | jq --arg v "$current_version" '[.[] | select(.version_number == $v)] | first')
+          version_id=$(echo "$version_json" | jq -r '.id // empty')
+
+          if [ -z "$version_id" ]; then
+            echo "::error title=Modrinth version not found::No NeoForge Modrinth version has version_number '$current_version'. Ensure a release exists before beta-only sync runs."
+            echo "Available NeoForge versions on Modrinth:"
+            echo "$listing" | jq -r '.[].version_number' | sed 's/^/  - /'
+            exit 1
+          fi
+
+          loaders=$(echo "$version_json" | jq -c '.loaders // []')
+          patch_url="https://api.modrinth.com/v2/version/${version_id}"
+          patch_body=$(jq -cn --argjson gv "$expected_game_versions" '{game_versions: $gv}')
+
+          # Prefer touching only game_versions. If the API requires loaders too,
+          # retry once preserving the current loaders from the version object.
+          response_file=$(mktemp)
+          status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+            -X PATCH "$patch_url" \
+            -H "Authorization: $MODRINTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$patch_body")
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            patch_body=$(jq -cn --argjson gv "$expected_game_versions" --argjson ld "$loaders" '{game_versions: $gv, loaders: $ld}')
+            status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+              -X PATCH "$patch_url" \
+              -H "Authorization: $MODRINTH_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "$patch_body")
+          fi
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error title=Modrinth PATCH failed::HTTP $status while updating version '$version_id'."
+            cat "$response_file"
+            rm -f "$response_file"
+            exit 1
+          fi
+          rm -f "$response_file"
+
+          verify () {
+            check_listing=$(curl -fsS -H "Authorization: $MODRINTH_TOKEN" "$listing_url")
+            check_json=$(echo "$check_listing" | jq --arg v "$current_version" '[.[] | select(.version_number == $v)] | first')
+            if [ "$check_json" = "null" ] || [ -z "$check_json" ]; then
+              echo "Modrinth still does not list NeoForge version '$current_version'."
+              return 1
+            fi
+            actual_count=$(echo "$check_json" | jq '.game_versions | length')
+            if [ "$actual_count" != "$expected_count" ]; then
+              echo "Game version count is $actual_count, expected $expected_count."
+              return 1
+            fi
+            missing=$(jq -cn --argjson expected "$expected_game_versions" --argjson actual "$(echo "$check_json" | jq -c '.game_versions')" '$expected - $actual')
+            if [ "$missing" != "[]" ]; then
+              echo "Modrinth version is missing Minecraft versions: $missing"
+              return 1
+            fi
+            echo "Synced NeoForge Modrinth metadata for $current_version across $actual_count Minecraft versions."
+          }
+
+          # Allow for API eventual consistency.
+          for attempt in 1 2 3 4 5 6; do
+            if verify; then
+              {
+                echo "Updated NeoForge Modrinth metadata for **$current_version**."
+                echo
+                echo "- No mod_version bump, tag, or release was created (beta-only path)."
+                echo "- Synced game_versions count: $expected_count"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ "$attempt" != "6" ]; then
+              echo "Attempt $attempt: metadata not visible yet, retrying in 20s..."
+              sleep 20
+            fi
+          done
+
+          echo "::error title=Modrinth verification failed::game_versions update did not become visible after retries."
+          exit 1
+
       - name: Bump mod_version
-        if: needs.discover.outputs.added != '[]'
+        if: needs.discover.outputs.release_needed == 'true'
         id: bump
         run: node .github/scripts/bump-version.mjs --bump patch
 
       - name: Commit, tag and push
-        if: needs.discover.outputs.added != '[]'
+        if: needs.discover.outputs.release_needed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -215,7 +326,7 @@ jobs:
           git push origin main "v${{ steps.bump.outputs.version }}"
 
       - name: Dispatch the release workflow
-        if: needs.discover.outputs.added != '[]'
+        if: needs.discover.outputs.release_needed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

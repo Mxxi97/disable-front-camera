@@ -176,6 +176,8 @@ jobs:
           game-version-filter: none
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
+          # Modrinth version type describes mod stability, not whether any
+          # supported Minecraft/NeoForge targets are beta.
           version-type: release
 
       - name: Publish to Modrinth (Fabric)
@@ -193,6 +195,8 @@ jobs:
           # queryable number.
           version: ${{ steps.meta.outputs.version }}+fabric
           name: v${{ steps.meta.outputs.version }} (Fabric)
+          # Same policy as NeoForge above: loader/minecraft beta does not force
+          # a beta mod release unless the mod build itself is experimental.
           version-type: release
 
       - name: Publish the GitHub release
