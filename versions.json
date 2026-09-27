@@ -4,7 +4,7 @@
   "targets": [
     {
       "minecraft": "1.21.1",
-      "neoforge": "21.1.251",
+      "neoforge": "21.1.252",
       "fabric": null,
       "beta": false,
       "parchment": "2024.11.17"
@@ -95,7 +95,7 @@
     },
     {
       "minecraft": "26.1.2",
-      "neoforge": "26.1.2.109",
+      "neoforge": "26.1.2.111",
       "fabric": "0.155.3+26.1.2",
       "beta": false,
       "parchment": null
@@ -109,7 +109,7 @@
     },
     {
       "minecraft": "26.3",
-      "neoforge": "26.3.0.22-beta",
+      "neoforge": "26.3.0.23-beta",
       "fabric": "0.161.0+26.3",
       "beta": true,
       "parchment": null
