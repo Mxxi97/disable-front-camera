@@ -1,5 +1,5 @@
 {
-  "moddev_version": "2.0.147",
+  "moddev_version": "2.0.148",
   "fabric_loader": "0.19.5",
   "targets": [
     {
@@ -25,7 +25,7 @@
     },
     {
       "minecraft": "1.21.4",
-      "neoforge": "21.4.157",
+      "neoforge": "21.4.158",
       "fabric": null,
       "beta": false,
       "parchment": "2025.03.23"
@@ -109,7 +109,7 @@
     },
     {
       "minecraft": "26.3",
-      "neoforge": "26.3.0.26-beta",
+      "neoforge": "26.3.0.34-beta",
       "fabric": "0.161.0+26.3",
       "beta": true,
       "parchment": null
