@@ -24,6 +24,15 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The changelog diffs versions.json against the previous v-tag.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate the changelog
+        run: node .github/scripts/changelog.mjs --out changelog.md
 
       - id: meta
         run: |
@@ -179,6 +188,7 @@ jobs:
           # Modrinth version type describes mod stability, not whether any
           # supported Minecraft/NeoForge targets are beta.
           version-type: release
+          changelog-file: changelog.md
 
       - name: Publish to Modrinth (Fabric)
         if: steps.meta.outputs.fabric_api != ''
@@ -198,6 +208,7 @@ jobs:
           # Same policy as NeoForge above: loader/minecraft beta does not force
           # a beta mod release unless the mod build itself is experimental.
           version-type: release
+          changelog-file: changelog.md
 
       - name: Publish the GitHub release
         uses: Kira-NT/mc-publish@v3.3.1
@@ -209,6 +220,7 @@ jobs:
           version: ${{ steps.meta.outputs.version }}
           name: v${{ steps.meta.outputs.version }}
           version-type: release
+          changelog-file: changelog.md
 
       # Confirm against the Modrinth API rather than trusting the step above to have
       # done what it reported. An earlier run silently dropped every game version and
