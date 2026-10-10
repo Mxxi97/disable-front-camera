@@ -4,7 +4,7 @@
   "targets": [
     {
       "minecraft": "1.21.1",
-      "neoforge": "21.1.256",
+      "neoforge": "21.1.257",
       "fabric": null,
       "beta": false,
       "parchment": "2024.11.17"
@@ -95,21 +95,21 @@
     },
     {
       "minecraft": "26.1.2",
-      "neoforge": "26.1.2.114",
+      "neoforge": "26.1.2.115",
       "fabric": "0.155.3+26.1.2",
       "beta": false,
       "parchment": null
     },
     {
       "minecraft": "26.2",
-      "neoforge": "26.2.0.88",
+      "neoforge": "26.2.0.89",
       "fabric": "0.161.0+26.2",
       "beta": false,
       "parchment": null
     },
     {
       "minecraft": "26.3",
-      "neoforge": "26.3.0.58-beta",
+      "neoforge": "26.3.0.65-beta",
       "fabric": "0.162.0+26.3",
       "beta": true,
       "parchment": null
