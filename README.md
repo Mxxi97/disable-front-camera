@@ -35,7 +35,7 @@ bump/tag/release flow.
 
 | Minecraft | NeoForge | Fabric |
 | --- | --- | --- |
-| 26.3 | 26.3.0.101 | yes |
+| 26.3 | 26.3.0.102 | yes |
 | 26.2 | 26.2.0.93 | yes |
 | 26.1.2 | 26.1.2.126 | yes |
 | 26.1.1 | 26.1.1.15-beta (beta) | yes |
