@@ -95,7 +95,7 @@
     },
     {
       "minecraft": "26.1.2",
-      "neoforge": "26.1.2.129",
+      "neoforge": "26.1.2.130",
       "fabric": "0.155.3+26.1.2",
       "beta": false,
       "parchment": null
@@ -109,7 +109,7 @@
     },
     {
       "minecraft": "26.3",
-      "neoforge": "26.3.0.115",
+      "neoforge": "26.3.0.117",
       "fabric": "0.167.0+26.3",
       "beta": false,
       "parchment": null
